@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"zhatBot/internal/infrastructure/config"
+	twitchinfra "zhatBot/internal/infrastructure/platform/twitch"
 	twitchadapter "zhatBot/internal/interface/adapters/twitch"
 	"zhatBot/internal/usecase/commands"
 	"zhatBot/internal/usecase/handle_message"
@@ -26,9 +27,15 @@ func main() {
 		Channels:   c.TwitchChannels,
 	}
 
+	twitchChannelSvc, err := twitchinfra.NewHelixChannelService(c.TwitchClientId, c.TwitchApiToken)
+	if err != nil {
+		log.Fatalf("error creando HelixChannelService: %v", err)
+	}
+
 	router := commands.NewRouter("!")
 
 	router.Register(commands.NewPingCommand())
+	router.Register(commands.NewTitleCommand(twitchChannelSvc, c.TwitchBroadcasterId))
 	// aquí luego: router.Register(commands.NewHelpCommand(...))
 	// router.Register(commands.NewBanCommand(...))
 

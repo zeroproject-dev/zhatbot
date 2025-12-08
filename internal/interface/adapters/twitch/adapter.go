@@ -115,7 +115,8 @@ func mapChatMessageToDomain(cm irc.ChatMessage) domain.Message {
 	sender := cm.Sender
 
 	return domain.Message{
-		Platform:  domain.PlatformTwitch,
+		Platform: domain.PlatformTwitch,
+		// ChannelID: strconv.FormatInt(cm.ChannelID, 10),
 		ChannelID: cm.Channel,
 		UserID:    strconv.FormatInt(sender.ID, 10),
 		Username:  sender.DisplayName,
