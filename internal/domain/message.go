@@ -4,6 +4,7 @@ type Platform string
 
 const (
 	PlatformTwitch Platform = "twitch"
+	PlatformKick   Platform = "kick"
 	// luego agregarás: discord, telegram, etc.
 )
 

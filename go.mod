@@ -7,6 +7,9 @@ require github.com/adeithe/go-twitch v0.4.1
 require github.com/joho/godotenv v1.5.1
 
 require (
+	github.com/glichtv/kick-sdk v1.0.0 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/johanvandegriff/kick-chat-wrapper v0.0.1 // indirect
 	github.com/nicklaw5/helix/v2 v2.32.0 // indirect
 )

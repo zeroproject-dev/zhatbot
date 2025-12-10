@@ -6,5 +6,9 @@ import "context"
 type TwitchChannelService interface {
 	// broadcasterID: ID numérico del canal (tu cuenta de streamer)
 	// newTitle: nuevo título a poner
-	UpdateTitle(ctx context.Context, broadcasterID, newTitle string) error
+	SetTitle(ctx context.Context, broadcasterID, newTitle string) error
+
+	// broadcasterID: ID numérico del canal (tu cuenta de streamer)
+	// gameName: Nombre de la categoria
+	UpdateCategory(ctx context.Context, broadcasterID, gameName string) error
 }

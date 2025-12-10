@@ -2,56 +2,63 @@ package commands
 
 import (
 	"context"
-	"log"
 	"strings"
 
 	"zhatBot/internal/domain"
+	"zhatBot/internal/usecase/stream"
 )
 
 type TitleCommand struct {
-	TwitchSvc     domain.TwitchChannelService
-	BroadcasterID string
+	resolver *stream.Resolver
 }
 
-func NewTitleCommand(svc domain.TwitchChannelService, broadcasterID string) *TitleCommand {
+func NewTitleCommand(
+	resolver *stream.Resolver,
+) *TitleCommand {
 	return &TitleCommand{
-		TwitchSvc:     svc,
-		BroadcasterID: broadcasterID,
+		resolver: resolver,
 	}
 }
 
-func (c *TitleCommand) Name() string      { return "title" }
-func (c *TitleCommand) Aliases() []string { return []string{} }
+func (c *TitleCommand) Name() string {
+	return "title"
+}
+
+func (c *TitleCommand) Aliases() []string {
+	return []string{}
+}
 
 func (c *TitleCommand) SupportsPlatform(p domain.Platform) bool {
-	return p == domain.PlatformTwitch // TODO: add to kick and youtube or tiktok
+	// el mismo comando sirve para varias plataformas
+	return p == domain.PlatformTwitch || p == domain.PlatformKick
 }
 
 func (c *TitleCommand) Handle(ctx context.Context, cmdCtx *Context) error {
 	msg := cmdCtx.Message
 
-	// 1) Solo el dueño del canal (broadcaster) puede usarlo
-	if !msg.IsPlatformOwner {
-		return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,
-			"❌ Solo el dueño del canal puede cambiar el título.")
+	if !msg.IsPlatformAdmin {
+		return nil
 	}
 
-	// 2) Necesitamos el nuevo título
 	if len(cmdCtx.Args) == 0 {
 		return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,
-			"Uso: !title Nuevo título de la transmisión")
+			"Uso: !title <nuevo título>")
 	}
 
-	newTitle := strings.TrimSpace(strings.Join(cmdCtx.Args, " "))
+	title := strings.Join(cmdCtx.Args, " ")
 
-	// 3) Llamar a la API de Twitch vía servicio Helix
-	if err := c.TwitchSvc.UpdateTitle(ctx, c.BroadcasterID, newTitle); err != nil {
-		log.Printf("error actualizando título: %v", err)
+	// ✅ aquí está la magia
+	service := c.resolver.ForPlatform(msg.Platform)
+	if service == nil {
 		return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,
-			"😢 No pude cambiar el título, revisa los permisos del token (channel:manage:broadcast).")
+			"⚠️ Esta plataforma no soporta cambiar el título.")
 	}
 
-	// 4) Confirmar en el chat
+	if err := service.SetTitle(ctx, title); err != nil {
+		return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,
+			"⚠️ Error al cambiar el título.")
+	}
+
 	return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,
-		"✅ Título actualizado: "+newTitle)
+		"✅ Título actualizado.")
 }

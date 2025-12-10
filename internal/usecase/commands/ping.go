@@ -21,12 +21,7 @@ func (c *PingCommand) Aliases() []string {
 }
 
 func (c *PingCommand) SupportsPlatform(p domain.Platform) bool {
-	switch p {
-	case domain.PlatformTwitch:
-		return true
-	default:
-		return false
-	}
+	return p == domain.PlatformKick || p == domain.PlatformTwitch
 }
 
 func (c *PingCommand) Handle(ctx context.Context, cmdCtx *Context) error {
