@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	twitchinfra "zhatBot/internal/infrastructure/platform/twitch"
 	kickadapter "zhatBot/internal/interface/adapters/kick"
 	twitchadapter "zhatBot/internal/interface/adapters/twitch"
+	ws "zhatBot/internal/interface/api/ws"
 	"zhatBot/internal/interface/outs"
 	"zhatBot/internal/usecase/commands"
 	"zhatBot/internal/usecase/handle_message"
@@ -31,6 +33,20 @@ func main() {
 		OAuthToken: c.TwitchToken,
 		Channels:   c.TwitchChannels,
 	}
+
+	wsAddr := os.Getenv("CHAT_WS_ADDR")
+	if wsAddr == "" {
+		wsAddr = ":8080"
+	}
+
+	wsServer := ws.NewServer(wsAddr)
+
+	go func() {
+		log.Printf("Iniciando servidor WS")
+		if err := wsServer.Start(ctx); err != nil && err != context.Canceled {
+			log.Printf("ws server error: %v", err)
+		}
+	}()
 
 	// ---------- 1) Crear servicios de stream por plataforma ----------
 
@@ -113,8 +129,16 @@ func main() {
 
 	uc := handle_message.NewInteractor(multiOut, router)
 
-	twitchAd.SetHandler(uc.Handle)
-	kickAd.SetHandler(uc.Handle)
+	dispatch := func(ctx context.Context, msg domain.Message) error {
+		if err := wsServer.PublishMessage(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("ws publish error: %v", err)
+		}
+
+		return uc.Handle(ctx, msg)
+	}
+
+	twitchAd.SetHandler(dispatch)
+	kickAd.SetHandler(dispatch)
 
 	log.Println("Iniciando bot...")
 

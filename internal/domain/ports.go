@@ -6,6 +6,10 @@ type OutgoingMessagePort interface {
 	SendMessage(ctx context.Context, platform Platform, channelID, text string) error
 }
 
+type MessagePublisher interface {
+	PublishMessage(ctx context.Context, msg Message) error
+}
+
 // IncomingMessagePort Para consumir mensajes entrantes (lo usan los usecases)
 type IncomingMessagePort interface {
 	// Tal vez no haga falta aquí; los adaptadores empujan los mensajes hacia usecases
