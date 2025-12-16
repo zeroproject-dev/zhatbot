@@ -11,6 +11,7 @@ import (
 
 	"zhatBot/internal/domain"
 	"zhatBot/internal/infrastructure/config"
+	sqlitestorage "zhatBot/internal/infrastructure/persistence/sqlite"
 	kickinfra "zhatBot/internal/infrastructure/platform/kick"
 	twitchinfra "zhatBot/internal/infrastructure/platform/twitch"
 	kickadapter "zhatBot/internal/interface/adapters/kick"
@@ -28,6 +29,41 @@ func main() {
 
 	c, _ := config.Load()
 
+	dbPath := c.DatabasePath
+	if dbPath == "" {
+		dbPath = "data/zhatbot.db"
+	}
+
+	credStore, err := sqlitestorage.NewCredentialStore(dbPath)
+	if err != nil {
+		log.Fatalf("no se pudo iniciar SQLite: %v", err)
+	}
+	defer credStore.Close()
+
+	if cred, err := credStore.Get(ctx, domain.PlatformTwitch, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
+		c.TwitchToken = cred.AccessToken
+	} else if err != nil {
+		log.Printf("error obteniendo token de Twitch bot desde DB: %v", err)
+	}
+
+	if cred, err := credStore.Get(ctx, domain.PlatformTwitch, "streamer"); err == nil && cred != nil {
+		if cred.AccessToken != "" {
+			c.TwitchApiToken = cred.AccessToken
+		}
+		if cred.RefreshToken != "" {
+			c.TwitchApiRefreshToken = cred.RefreshToken
+		}
+	} else if err != nil {
+		log.Printf("error obteniendo token de Twitch streamer desde DB: %v", err)
+	}
+
+	kickAccessToken := os.Getenv("KICK_BOT_TOKEN")
+	if cred, err := credStore.Get(ctx, domain.PlatformKick, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
+		kickAccessToken = cred.AccessToken
+	} else if err != nil {
+		log.Printf("error obteniendo token de Kick bot desde DB: %v", err)
+	}
+
 	cfg := twitchadapter.Config{
 		Username:   c.TwitchUsername,
 		OAuthToken: c.TwitchToken,
@@ -39,7 +75,32 @@ func main() {
 		wsAddr = ":8080"
 	}
 
-	wsServer := ws.NewServer(wsAddr)
+	wsConfig := ws.Config{
+		Addr:           wsAddr,
+		CredentialRepo: credStore,
+	}
+
+	if c.TwitchClientId != "" && c.TwitchClientSecret != "" && c.TwitchRedirectURI != "" {
+		wsConfig.Twitch = &ws.TwitchOAuthConfig{
+			ClientID:       c.TwitchClientId,
+			ClientSecret:   c.TwitchClientSecret,
+			RedirectURI:    c.TwitchRedirectURI,
+			BotScopes:      []string{"chat:read", "chat:edit"},
+			StreamerScopes: []string{"channel:manage:broadcast"},
+		}
+	}
+
+	if c.KickClientID != "" && c.KickClientSecret != "" && c.KickRedirectURI != "" {
+		wsConfig.Kick = &ws.KickOAuthConfig{
+			ClientID:       c.KickClientID,
+			ClientSecret:   c.KickClientSecret,
+			RedirectURI:    c.KickRedirectURI,
+			BotScopes:      []string{"user:read", "channel:read", "channel:write"},
+			StreamerScopes: []string{"user:read", "channel:read", "channel:write"},
+		}
+	}
+
+	wsServer := ws.NewServer(wsConfig)
 
 	go func() {
 		log.Printf("Iniciando servidor WS")
@@ -68,7 +129,7 @@ func main() {
 	// kickinfra.NewStreamService espera (KickStreamServiceConfig) y devuelve (svc, error).
 	kickSvc, err := kickinfra.NewStreamService(
 		kickinfra.KickStreamServiceConfig{
-			AccessToken: os.Getenv("KICK_BOT_TOKEN"),
+			AccessToken: kickAccessToken,
 			// si tu struct tiene más campos (RefreshToken, OwnerID...), añádelos aquí.
 			// RefreshToken: os.Getenv("KICK_BOT_REFRESH_TOKEN"),
 		},
@@ -116,7 +177,7 @@ func main() {
 	}
 
 	kickCfg := kickadapter.Config{
-		AccessToken:       os.Getenv("KICK_BOT_TOKEN"),
+		AccessToken:       kickAccessToken,
 		BroadcasterUserID: broadcasterID,
 		ChatroomID:        chatroomID,
 	}

@@ -26,6 +26,7 @@ type Server struct {
 	handler MessageHandler
 
 	httpSrv *http.Server
+	api     *apiHandlers
 }
 
 type MessageHandler func(ctx context.Context, msg domain.Message) error
@@ -42,16 +43,19 @@ func (c *wsClient) writeJSON(v any) error {
 }
 
 // NewServer crea un servidor WebSocket escuchando en addr (ej. ":8080").
-func NewServer(addr string) *Server {
-	return &Server{
-		addr: addr,
+func NewServer(cfg Config) *Server {
+	server := &Server{
+		addr: cfg.addr(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true
 			},
 		},
 		clients: make(map[*wsClient]struct{}),
+		api:     newAPIHandlers(cfg),
 	}
+
+	return server
 }
 
 // Start levanta el HTTP server y se bloquea hasta que el contexto se cancela.
@@ -60,6 +64,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/ws/chat", func(w http.ResponseWriter, r *http.Request) {
 		s.handleWS(ctx, w, r)
 	})
+	if s.api != nil {
+		s.api.register(mux)
+	}
 
 	srv := &http.Server{
 		Addr:    s.addr,

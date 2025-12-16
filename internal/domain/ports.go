@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type OutgoingMessagePort interface {
 	SendMessage(ctx context.Context, platform Platform, channelID, text string) error
@@ -19,4 +22,19 @@ type IncomingMessagePort interface {
 type RoleRepository interface {
 	GetByUser(ctx context.Context, platform Platform, userID string) (*Role, error)
 	SetForUser(ctx context.Context, platform Platform, userID string, roleName string) error
+}
+
+type Credential struct {
+	Platform     Platform
+	Role         string
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type CredentialRepository interface {
+	Get(ctx context.Context, platform Platform, role string) (*Credential, error)
+	Save(ctx context.Context, cred *Credential) error
+	List(ctx context.Context) ([]*Credential, error)
 }

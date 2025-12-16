@@ -10,5 +10,7 @@ github.com/johanvandegriff/kick-chat-wrapper v0.0.1 h1:XjRaoLNQ0/5iZdPrQ+wpufHBY
 github.com/johanvandegriff/kick-chat-wrapper v0.0.1/go.mod h1:CAJaTTh57gd0M7+ZYNIEYpJ4kHK8aG2nBh93gWQvJOc=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
+github.com/mattn/go-sqlite3 v1.14.17 h1:mCRHCLDUBXgpKAqIKsaAaAsrAlbkeomtRFKXh2L6YIM=
+github.com/mattn/go-sqlite3 v1.14.17/go.mod h1:2eHXhiwb8IkHr+BDWZGa96P6+rkvnG63S2DGjv9HUNg=
 github.com/nicklaw5/helix/v2 v2.32.0 h1:ZRPt+wRUMQqpny6yZKVY9rUGNwv+ZmIh75fSiopMXuY=
 github.com/nicklaw5/helix/v2 v2.32.0/go.mod h1:KaXa2mb2kBzsDana9RbXevTgnfU95DMoSORWo2hqlWA=

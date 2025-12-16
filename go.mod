@@ -11,5 +11,6 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/johanvandegriff/kick-chat-wrapper v0.0.1 // indirect
+	github.com/mattn/go-sqlite3 v1.14.17 // indirect
 	github.com/nicklaw5/helix/v2 v2.32.0 // indirect
 )
