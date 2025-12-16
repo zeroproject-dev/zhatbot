@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,9 +23,12 @@ type Server struct {
 
 	mu      sync.RWMutex
 	clients map[*wsClient]struct{}
+	handler MessageHandler
 
 	httpSrv *http.Server
 }
+
+type MessageHandler func(ctx context.Context, msg domain.Message) error
 
 type wsClient struct {
 	conn *websocket.Conn
@@ -52,7 +57,9 @@ func NewServer(addr string) *Server {
 // Start levanta el HTTP server y se bloquea hasta que el contexto se cancela.
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/chat", s.handleWS)
+	mux.HandleFunc("/ws/chat", func(w http.ResponseWriter, r *http.Request) {
+		s.handleWS(ctx, w, r)
+	})
 
 	srv := &http.Server{
 		Addr:    s.addr,
@@ -81,7 +88,7 @@ func (s *Server) Start(ctx context.Context) error {
 	return err
 }
 
-func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleWS(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("ws: upgrade error: %v", err)
@@ -97,10 +104,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("ws: nueva conexión desde %s (%d clientes activos)", r.RemoteAddr, clientCount)
 
-	go s.waitForClose(client)
+	go s.handleClient(ctx, client)
 }
 
-func (s *Server) waitForClose(client *wsClient) {
+func (s *Server) handleClient(ctx context.Context, client *wsClient) {
 	defer func() {
 		client.conn.Close()
 
@@ -113,12 +120,110 @@ func (s *Server) waitForClose(client *wsClient) {
 	}()
 
 	for {
-		if _, _, err := client.conn.ReadMessage(); err != nil {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		msgType, data, err := client.conn.ReadMessage()
+		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				log.Printf("ws: read error: %v", err)
 			}
 			return
 		}
+
+		if msgType != websocket.TextMessage {
+			continue
+		}
+
+		if err := s.dispatchIncoming(ctx, data); err != nil {
+			log.Printf("ws: incoming dispatch error: %v", err)
+		}
+	}
+}
+
+func (s *Server) dispatchIncoming(ctx context.Context, data []byte) error {
+	handler := s.getHandler()
+	if handler == nil {
+		return nil
+	}
+
+	payload := incomingPayload{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		payload.Text = strings.TrimSpace(string(data))
+	} else {
+		payload.Text = strings.TrimSpace(payload.Text)
+	}
+
+	if payload.Text == "" {
+		return fmt.Errorf("ws: empty incoming text")
+	}
+
+	platform := normalizePlatform(payload.Platform)
+	channelID := strings.TrimSpace(payload.ChannelID)
+	userID := strings.TrimSpace(payload.UserID)
+	username := strings.TrimSpace(payload.Username)
+
+	if platform == "" {
+		platform = domain.PlatformTwitch
+	}
+	if channelID == "" {
+		channelID = ""
+	}
+	if username == "" {
+		username = "web-user"
+	}
+	if userID == "" {
+		userID = "web"
+	}
+
+	msg := domain.Message{
+		Platform:        platform,
+		ChannelID:       channelID,
+		UserID:          userID,
+		Username:        username,
+		Text:            payload.Text,
+		IsPrivate:       payload.IsPrivate,
+		IsPlatformOwner: true,
+		IsPlatformAdmin: true,
+		IsPlatformMod:   true,
+		IsPlatformVip:   true,
+	}
+
+	return handler(ctx, msg)
+}
+
+func (s *Server) getHandler() MessageHandler {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.handler
+}
+
+func (s *Server) SetHandler(h MessageHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.handler = h
+}
+
+type incomingPayload struct {
+	Text      string `json:"text"`
+	Platform  string `json:"platform"`
+	ChannelID string `json:"channel_id"`
+	UserID    string `json:"user_id"`
+	Username  string `json:"username"`
+	IsPrivate bool   `json:"is_private"`
+}
+
+func normalizePlatform(p string) domain.Platform {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case string(domain.PlatformTwitch):
+		return domain.PlatformTwitch
+	case string(domain.PlatformKick):
+		return domain.PlatformKick
+	default:
+		return ""
 	}
 }
 

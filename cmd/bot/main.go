@@ -129,14 +129,34 @@ func main() {
 
 	uc := handle_message.NewInteractor(multiOut, router)
 
+	kickChannelID := strconv.Itoa(chatroomID)
+
 	dispatch := func(ctx context.Context, msg domain.Message) error {
-		if err := wsServer.PublishMessage(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
+		msgNormalized := msg
+
+		if msgNormalized.ChannelID == "" {
+			switch msgNormalized.Platform {
+			case domain.PlatformTwitch:
+				if len(cfg.Channels) > 0 {
+					msgNormalized.ChannelID = cfg.Channels[0]
+				}
+			case domain.PlatformKick:
+				msgNormalized.ChannelID = kickChannelID
+			}
+		}
+
+		if msgNormalized.Username == "" {
+			msgNormalized.Username = "web-user"
+		}
+
+		if err := wsServer.PublishMessage(ctx, msgNormalized); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("ws publish error: %v", err)
 		}
 
-		return uc.Handle(ctx, msg)
+		return uc.Handle(ctx, msgNormalized)
 	}
 
+	wsServer.SetHandler(dispatch)
 	twitchAd.SetHandler(dispatch)
 	kickAd.SetHandler(dispatch)
 
