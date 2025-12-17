@@ -222,10 +222,17 @@ func main() {
 
 	// ---------- 3) Router de comandos ----------
 
+	customManager, err := commands.NewCustomCommandManager(ctx, credStore)
+	if err != nil {
+		log.Fatalf("no pude iniciar el gestor de comandos: %v", err)
+	}
+
 	router := commands.NewRouter("!")
+	router.SetCustomManager(customManager)
 
 	// Comandos genéricos
 	router.Register(commands.NewPingCommand())
+	router.Register(commands.NewManageCustomCommand(customManager))
 
 	// Comando title (único, multi-plataforma)
 	router.Register(

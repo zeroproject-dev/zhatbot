@@ -66,6 +66,19 @@ CREATE TABLE IF NOT EXISTS credentials (
 		}
 	}
 
+	const customCommandsTable = `
+CREATE TABLE IF NOT EXISTS custom_commands (
+	name TEXT PRIMARY KEY,
+	response TEXT NOT NULL,
+	aliases TEXT,
+	platforms TEXT,
+	updated_at TIMESTAMP NOT NULL
+);`
+
+	if _, err := db.Exec(customCommandsTable); err != nil {
+		return fmt.Errorf("sqlite: migrate custom_commands: %w", err)
+	}
+
 	return nil
 }
 
@@ -217,3 +230,184 @@ func decodeMetadata(raw string) map[string]string {
 }
 
 var _ domain.CredentialRepository = (*CredentialStore)(nil)
+
+// Custom command storage
+
+func (s *CredentialStore) UpsertCustomCommand(ctx context.Context, cmd *domain.CustomCommand) error {
+	if cmd == nil {
+		return fmt.Errorf("sqlite: custom command nil")
+	}
+
+	now := time.Now().UTC()
+	if cmd.UpdatedAt.IsZero() {
+		cmd.UpdatedAt = now
+	}
+
+	const stmt = `
+INSERT INTO custom_commands (name, response, aliases, platforms, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(name) DO UPDATE SET
+	response=excluded.response,
+	aliases=excluded.aliases,
+	platforms=excluded.platforms,
+	updated_at=excluded.updated_at;
+`
+
+	_, err := s.db.ExecContext(
+		ctx,
+		stmt,
+		cmd.Name,
+		cmd.Response,
+		encodeStringSlice(cmd.Aliases),
+		encodePlatforms(cmd.Platforms),
+		cmd.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("sqlite: upsert custom command: %w", err)
+	}
+
+	return nil
+}
+
+func (s *CredentialStore) GetCustomCommand(ctx context.Context, name string) (*domain.CustomCommand, error) {
+	const query = `
+SELECT name, response, aliases, platforms, updated_at
+FROM custom_commands
+WHERE LOWER(name) = LOWER(?)
+LIMIT 1;
+`
+
+	row := s.db.QueryRowContext(ctx, query, name)
+
+	var record domain.CustomCommand
+	var aliasesRaw, platformsRaw sql.NullString
+	var updatedAt sql.NullTime
+
+	if err := row.Scan(&record.Name, &record.Response, &aliasesRaw, &platformsRaw, &updatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("sqlite: get custom command: %w", err)
+	}
+
+	record.Aliases = decodeStringSlice(aliasesRaw.String)
+	record.Platforms = decodePlatforms(platformsRaw.String)
+	record.UpdatedAt = updatedAt.Time
+
+	return &record, nil
+}
+
+func (s *CredentialStore) ListCustomCommands(ctx context.Context) ([]*domain.CustomCommand, error) {
+	const query = `
+SELECT name, response, aliases, platforms, updated_at
+FROM custom_commands;
+`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list custom commands: %w", err)
+	}
+	defer rows.Close()
+
+	var cmds []*domain.CustomCommand
+	for rows.Next() {
+		var record domain.CustomCommand
+		var aliasesRaw, platformsRaw sql.NullString
+		var updatedAt sql.NullTime
+
+		if err := rows.Scan(&record.Name, &record.Response, &aliasesRaw, &platformsRaw, &updatedAt); err != nil {
+			return nil, fmt.Errorf("sqlite: scan custom command: %w", err)
+		}
+
+		record.Aliases = decodeStringSlice(aliasesRaw.String)
+		record.Platforms = decodePlatforms(platformsRaw.String)
+		record.UpdatedAt = updatedAt.Time
+
+		cmds = append(cmds, &record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: list custom command rows: %w", err)
+	}
+
+	return cmds, nil
+}
+
+func encodeStringSlice(values []string) interface{} {
+	clean := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			clean = append(clean, v)
+		}
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
+func decodeStringSlice(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func encodePlatforms(values []domain.Platform) interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	stringsVals := make([]string, 0, len(values))
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		stringsVals = append(stringsVals, string(v))
+	}
+	if len(stringsVals) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(stringsVals)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
+func decodePlatforms(raw string) []domain.Platform {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	out := make([]domain.Platform, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		out = append(out, domain.Platform(v))
+	}
+	return out
+}
+
+var _ domain.CustomCommandRepository = (*CredentialStore)(nil)
+
+func (s *CredentialStore) DeleteCustomCommand(ctx context.Context, name string) error {
+	const stmt = `DELETE FROM custom_commands WHERE LOWER(name) = LOWER(?);`
+	if _, err := s.db.ExecContext(ctx, stmt, name); err != nil {
+		return fmt.Errorf("sqlite: delete custom command: %w", err)
+	}
+	return nil
+}

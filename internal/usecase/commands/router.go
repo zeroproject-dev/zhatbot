@@ -10,6 +10,7 @@ import (
 type Router struct {
 	prefix   string
 	cmdIndex map[string]Command
+	customs  *CustomCommandManager
 }
 
 func NewRouter(prefix string) *Router {
@@ -24,6 +25,10 @@ func (r *Router) Register(cmd Command) {
 	for _, alias := range cmd.Aliases() {
 		r.cmdIndex[strings.ToLower(alias)] = cmd
 	}
+}
+
+func (r *Router) SetCustomManager(manager *CustomCommandManager) {
+	r.customs = manager
 }
 
 func (r *Router) Handle(ctx context.Context, msg domain.Message, out domain.OutgoingMessagePort) error {
@@ -47,10 +52,13 @@ func (r *Router) Handle(ctx context.Context, msg domain.Message, out domain.Outg
 
 	cmd, ok := r.cmdIndex[cmdName]
 	if !ok {
-		return out.SendMessage(ctx, msg.Platform, msg.ChannelID, "Comando no encontrado")
+		return r.handleDynamic(ctx, cmdName, msg, out)
 	}
 
 	if !cmd.SupportsPlatform(msg.Platform) {
+		if handled, err := r.tryCustom(ctx, cmdName, msg, out); handled {
+			return err
+		}
 		return out.SendMessage(ctx, msg.Platform, msg.ChannelID, "Este comando no está disponible aquí.")
 	}
 
@@ -62,4 +70,18 @@ func (r *Router) Handle(ctx context.Context, msg domain.Message, out domain.Outg
 	}
 
 	return cmd.Handle(ctx, ctxCmd)
+}
+
+func (r *Router) handleDynamic(ctx context.Context, trigger string, msg domain.Message, out domain.OutgoingMessagePort) error {
+	if handled, err := r.tryCustom(ctx, trigger, msg, out); handled {
+		return err
+	}
+	return out.SendMessage(ctx, msg.Platform, msg.ChannelID, "Comando no encontrado")
+}
+
+func (r *Router) tryCustom(ctx context.Context, trigger string, msg domain.Message, out domain.OutgoingMessagePort) (bool, error) {
+	if r.customs == nil {
+		return false, nil
+	}
+	return r.customs.TryHandle(ctx, trigger, msg, out)
 }
