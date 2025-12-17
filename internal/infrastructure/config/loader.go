@@ -14,7 +14,6 @@ type Config struct {
 	TwitchApiToken        string
 	TwitchClientSecret    string
 	TwitchClientId        string
-	TwitchBroadcasterId   string
 	TwitchApiRefreshToken string
 	TwitchRedirectURI     string
 
@@ -35,7 +34,6 @@ func Load() (*Config, error) {
 		TwitchApiToken:        os.Getenv("TWITCH_API_ACCESS_TOKEN"),
 		TwitchClientSecret:    os.Getenv("TWITCH_CLIENT_SECRET"),
 		TwitchClientId:        os.Getenv("TWITCH_CLIENT_ID"),
-		TwitchBroadcasterId:   os.Getenv("TWITCH_BROADCASTER_ID"),
 		TwitchApiRefreshToken: os.Getenv("TWITCH_API_REFRESH_TOKEN"),
 		TwitchRedirectURI:     os.Getenv("TWITCH_REDIRECT_URI"),
 
@@ -46,8 +44,8 @@ func Load() (*Config, error) {
 		DatabasePath: os.Getenv("DATABASE_PATH"),
 	}
 
-	if cfg.TwitchUsername == "" || cfg.TwitchToken == "" {
-		log.Println("Advertencia: No se encontraron variables necesarias de Twitch")
+	if cfg.TwitchUsername == "" {
+		log.Println("Advertencia: TWITCH_BOT_USERNAME no configurado")
 	}
 
 	return cfg, nil

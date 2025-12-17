@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -278,12 +279,25 @@ func (a *apiHandlers) handleTwitchCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	metadata := make(map[string]string)
+	if profile, err := a.fetchTwitchProfile(r.Context(), tokenResp.AccessToken); err == nil {
+		if profile.ID != "" {
+			metadata["user_id"] = profile.ID
+		}
+		if profile.Login != "" {
+			metadata["login"] = profile.Login
+		}
+	} else {
+		log.Printf("twitch oauth: no pude obtener el perfil: %v", err)
+	}
+
 	cred := &domain.Credential{
 		Platform:     domain.PlatformTwitch,
 		Role:         entry.Role,
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
+		Metadata:     metadata,
 	}
 
 	if err := a.credRepo.Save(r.Context(), cred); err != nil {

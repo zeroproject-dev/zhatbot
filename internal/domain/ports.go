@@ -31,6 +31,7 @@ type Credential struct {
 	RefreshToken string
 	ExpiresAt    time.Time
 	UpdatedAt    time.Time
+	Metadata     map[string]string
 }
 
 type CredentialRepository interface {

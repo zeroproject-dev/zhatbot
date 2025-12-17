@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/nicklaw5/helix/v2"
 
 	"zhatBot/internal/domain"
 	"zhatBot/internal/infrastructure/config"
@@ -147,9 +151,14 @@ func main() {
 		log.Fatal(err)
 	}
 
+	broadcasterID, err := resolveTwitchBroadcasterID(ctx, c.TwitchClientId, c.TwitchApiToken, c.TwitchUsername)
+	if err != nil {
+		log.Fatalf("no pude resolver el ID de Twitch: %v", err)
+	}
+
 	twitchTitleSvc := twitchinfra.NewTwitchTitleAdapter(
 		twitchChannelSvc,
-		c.TwitchBroadcasterId,
+		broadcasterID,
 	)
 
 	// kickinfra.NewStreamService espera (KickStreamServiceConfig) y devuelve (svc, error).
@@ -196,7 +205,7 @@ func main() {
 
 	twitchAd := twitchadapter.NewAdapter(cfg)
 
-	broadcasterID, err := strconv.Atoi(os.Getenv("KICK_BROADCASTER_USER_ID"))
+	kickBroadcasterID, err := strconv.Atoi(os.Getenv("KICK_BROADCASTER_USER_ID"))
 	if err != nil {
 		log.Fatalf("KICK_BROADCASTER_USER_ID inválido")
 	}
@@ -212,7 +221,7 @@ func main() {
 
 	kickCfg := kickadapter.Config{
 		AccessToken:       kickChatToken,
-		BroadcasterUserID: broadcasterID,
+		BroadcasterUserID: kickBroadcasterID,
 		ChatroomID:        chatroomID,
 	}
 
@@ -282,4 +291,42 @@ func formatTwitchOAuthToken(token string) string {
 		return token
 	}
 	return "oauth:" + token
+}
+
+func resolveTwitchBroadcasterID(ctx context.Context, clientID, accessToken, username string) (string, error) {
+	if strings.TrimSpace(clientID) == "" {
+		return "", fmt.Errorf("twitch client id vacío")
+	}
+	if strings.TrimSpace(accessToken) == "" {
+		return "", fmt.Errorf("twitch access token vacío")
+	}
+	if strings.TrimSpace(username) == "" {
+		return "", fmt.Errorf("twitch username vacío")
+	}
+
+	client, err := helix.NewClient(&helix.Options{
+		ClientID:        clientID,
+		UserAccessToken: accessToken,
+	})
+	if err != nil {
+		return "", fmt.Errorf("helix: NewClient: %w", err)
+	}
+
+	resp, err := client.GetUsers(&helix.UsersParams{
+		Logins: []string{username},
+	})
+	if err != nil {
+		return "", fmt.Errorf("helix: GetUsers: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("helix: GetUsers failed (%d: %s) %s",
+			resp.StatusCode, resp.Error, resp.ErrorMessage)
+	}
+
+	if len(resp.Data.Users) == 0 {
+		return "", fmt.Errorf("usuario de Twitch no encontrado: %s", username)
+	}
+
+	return resp.Data.Users[0].ID, nil
 }
