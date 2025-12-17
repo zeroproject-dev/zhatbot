@@ -160,6 +160,25 @@ func (a *Adapter) SendMessage(ctx context.Context, platform domain.Platform, cha
 	return nil
 }
 
+func (a *Adapter) UpdateAccessToken(token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.cfg.AccessToken = token
+	if a.sdk != nil {
+		a.sdk = kicksdk.NewClient(
+			kicksdk.WithAccessTokens(kicksdk.AccessTokens{
+				UserAccessToken: token,
+			}),
+		)
+	}
+}
+
 func mapChatMessageToDomain(m kickchatwrapper.ChatMessage, broadcasterUserID int) domain.Message {
 	// TODO: log.Println(m)
 	sender := m.Sender

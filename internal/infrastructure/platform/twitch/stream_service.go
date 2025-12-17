@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/nicklaw5/helix/v2"
 
@@ -13,6 +14,7 @@ import (
 
 type TwitchStreamService struct {
 	client *helix.Client
+	mu     sync.RWMutex
 }
 
 func NewStreamService(clientID, userAccessToken string) (domain.TwitchChannelService, error) {
@@ -30,7 +32,8 @@ func NewStreamService(clientID, userAccessToken string) (domain.TwitchChannelSer
 }
 
 func (s *TwitchStreamService) SetTitle(ctx context.Context, broadcasterID, newTitle string) error {
-	resp, err := s.client.EditChannelInformation(&helix.EditChannelInformationParams{
+	client := s.getClient()
+	resp, err := client.EditChannelInformation(&helix.EditChannelInformationParams{
 		BroadcasterID: broadcasterID,
 		Title:         newTitle,
 	})
@@ -53,7 +56,8 @@ func (s *TwitchStreamService) UpdateCategory(ctx context.Context, broadcasterID,
 		return fmt.Errorf("empty game name")
 	}
 
-	gamesResp, err := s.client.GetGames(&helix.GamesParams{
+	client := s.getClient()
+	gamesResp, err := client.GetGames(&helix.GamesParams{
 		Names: []string{gameName},
 		// TODO: add favourite categories for fast changes instead of put the name IDs: []string,
 	})
@@ -73,7 +77,7 @@ func (s *TwitchStreamService) UpdateCategory(ctx context.Context, broadcasterID,
 	game := gamesResp.Data.Games[0]
 
 	// 2) Editar la info del canal con la nueva categoría
-	editResp, err := s.client.EditChannelInformation(&helix.EditChannelInformationParams{
+	editResp, err := client.EditChannelInformation(&helix.EditChannelInformationParams{
 		BroadcasterID: broadcasterID,
 		GameID:        game.ID,
 	})
@@ -95,7 +99,8 @@ func (s *TwitchStreamService) SearchCategories(ctx context.Context, query string
 		return nil, fmt.Errorf("empty query")
 	}
 
-	resp, err := s.client.SearchCategories(&helix.SearchCategoriesParams{
+	client := s.getClient()
+	resp, err := client.SearchCategories(&helix.SearchCategoriesParams{
 		Query: query,
 		First: 25,
 	})
@@ -117,4 +122,23 @@ func (s *TwitchStreamService) SearchCategories(ctx context.Context, query string
 	}
 
 	return options, nil
+}
+
+func (s *TwitchStreamService) UpdateAccessToken(token string) {
+	if s == nil || s.client == nil {
+		return
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.client.SetUserAccessToken(token)
+}
+
+func (s *TwitchStreamService) getClient() *helix.Client {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.client
 }

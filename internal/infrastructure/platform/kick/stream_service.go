@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	kicksdk "github.com/glichtv/kick-sdk"
 	optional "github.com/glichtv/kick-sdk/optional"
@@ -17,6 +18,7 @@ type KickStreamServiceConfig struct {
 }
 
 type KickStreamService struct {
+	mu     sync.RWMutex
 	client *kicksdk.Client
 }
 
@@ -45,7 +47,8 @@ func (s *KickStreamService) SetTitle(ctx context.Context, newTitle string) error
 		// si tu SDK requiere BroadcasterUserID, lo añades aquí
 	}
 
-	_, err := s.client.Channels().UpdateStream(ctx, input)
+	client := s.getClient()
+	_, err := client.Channels().UpdateStream(ctx, input)
 	if err != nil {
 		return fmt.Errorf("kick: error al actualizar título: %w", err)
 	}
@@ -65,7 +68,8 @@ func (s *KickStreamService) SetCategory(ctx context.Context, categoryName string
 	}
 
 	// 2) llamar a la API
-	resp, err := s.client.Categories().Search(ctx, searchInput)
+	client := s.getClient()
+	resp, err := client.Categories().Search(ctx, searchInput)
 	if err != nil {
 		return fmt.Errorf("kick: error buscando categorías: %w", err)
 	}
@@ -85,7 +89,7 @@ func (s *KickStreamService) SetCategory(ctx context.Context, categoryName string
 		// si en algún momento necesitas ChannelID, se añade aquí con otro optional.From(...)
 	}
 
-	if _, err := s.client.Channels().UpdateStream(ctx, input); err != nil {
+	if _, err := client.Channels().UpdateStream(ctx, input); err != nil {
 		return fmt.Errorf("kick: error actualizando categoría: %w", err)
 	}
 
@@ -102,7 +106,8 @@ func (s *KickStreamService) SearchCategories(ctx context.Context, query string) 
 		Query: query,
 	}
 
-	resp, err := s.client.Categories().Search(ctx, searchInput)
+	client := s.getClient()
+	resp, err := client.Categories().Search(ctx, searchInput)
 	if err != nil {
 		return nil, fmt.Errorf("kick: error buscando categorías: %w", err)
 	}
@@ -118,4 +123,28 @@ func (s *KickStreamService) SearchCategories(ctx context.Context, query string) 
 	}
 
 	return options, nil
+}
+
+func (s *KickStreamService) UpdateAccessToken(token string) {
+	if s == nil {
+		return
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	client := kicksdk.NewClient(
+		kicksdk.WithAccessTokens(kicksdk.AccessTokens{
+			UserAccessToken: token,
+		}),
+	)
+	s.mu.Lock()
+	s.client = client
+	s.mu.Unlock()
+}
+
+func (s *KickStreamService) getClient() *kicksdk.Client {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.client
 }

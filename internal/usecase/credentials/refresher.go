@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	kicksdk "github.com/glichtv/kick-sdk"
@@ -32,7 +34,12 @@ type Refresher struct {
 	kickCfg   KickConfig
 	kickCli   *kicksdk.Client
 	httpCli   *http.Client
+
+	hooksMu sync.RWMutex
+	hooks   []CredentialHook
 }
+
+type CredentialHook func(ctx context.Context, cred *domain.Credential)
 
 func NewRefresher(repo domain.CredentialRepository, twitchCfg TwitchConfig, kickCfg KickConfig) *Refresher {
 	var kickClient *kicksdk.Client
@@ -55,6 +62,48 @@ func NewRefresher(repo domain.CredentialRepository, twitchCfg TwitchConfig, kick
 			Timeout: 15 * time.Second,
 		},
 	}
+}
+
+func (r *Refresher) RegisterHook(h CredentialHook) {
+	if h == nil {
+		return
+	}
+	r.hooksMu.Lock()
+	defer r.hooksMu.Unlock()
+	r.hooks = append(r.hooks, h)
+}
+
+func (r *Refresher) notifyHooks(ctx context.Context, cred *domain.Credential) {
+	if cred == nil {
+		return
+	}
+	r.hooksMu.RLock()
+	hooks := append([]CredentialHook(nil), r.hooks...)
+	r.hooksMu.RUnlock()
+	for _, h := range hooks {
+		h(ctx, cred)
+	}
+}
+
+func (r *Refresher) Start(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := r.RefreshAll(ctx); err != nil {
+					log.Printf("token refresher: %v", err)
+				}
+			}
+		}
+	}()
 }
 
 func (r *Refresher) RefreshAll(ctx context.Context) error {
@@ -149,7 +198,11 @@ func (r *Refresher) refreshTwitch(ctx context.Context, cred *domain.Credential) 
 	cred.ExpiresAt = time.Now().Add(time.Duration(payload.ExpiresIn) * time.Second)
 	cred.UpdatedAt = time.Now()
 
-	return r.repo.Save(ctx, cred)
+	if err := r.repo.Save(ctx, cred); err != nil {
+		return err
+	}
+	r.notifyHooks(ctx, cred)
+	return nil
 }
 
 func (r *Refresher) refreshKick(ctx context.Context, cred *domain.Credential) error {
@@ -173,7 +226,11 @@ func (r *Refresher) refreshKick(ctx context.Context, cred *domain.Credential) er
 	cred.ExpiresAt = time.Now().Add(time.Duration(payload.ExpiresIn) * time.Second)
 	cred.UpdatedAt = time.Now()
 
-	return r.repo.Save(ctx, cred)
+	if err := r.repo.Save(ctx, cred); err != nil {
+		return err
+	}
+	r.notifyHooks(ctx, cred)
+	return nil
 }
 
 type twitchTokenPayload struct {

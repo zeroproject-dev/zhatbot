@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nicklaw5/helix/v2"
 
@@ -63,6 +64,9 @@ func main() {
 	if err := refresher.RefreshAll(ctx); err != nil {
 		log.Printf("error refrescando tokens: %v", err)
 	}
+
+	const refreshInterval = 1 * time.Hour
+	refresher.Start(ctx, refreshInterval)
 
 	if cred, err := credStore.Get(ctx, domain.PlatformTwitch, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
 		c.TwitchToken = cred.AccessToken
@@ -142,6 +146,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	twitchStreamSvc, _ := twitchChannelSvc.(*twitchinfra.TwitchStreamService)
 
 	broadcasterID, err := resolveTwitchBroadcasterID(ctx, c.TwitchClientId, c.TwitchApiToken, c.TwitchUsername)
 	if err != nil {
@@ -168,6 +173,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("error creando KickStreamService: %v", err)
 	}
+	kickStreamSvc, _ := kickSvc.(*kickinfra.KickStreamService)
 
 	categorySvc := categoryusecase.NewService(categoryusecase.Config{
 		Twitch:              twitchChannelSvc,
@@ -175,6 +181,31 @@ func main() {
 		Kick:                kickSvc,
 	})
 	wsConfig.CategoryManager = categorySvc
+
+	var kickAd *kickadapter.Adapter
+
+	refresher.RegisterHook(func(ctx context.Context, cred *domain.Credential) {
+		if cred == nil {
+			return
+		}
+		switch cred.Platform {
+		case domain.PlatformTwitch:
+			if strings.EqualFold(cred.Role, "streamer") && twitchStreamSvc != nil {
+				twitchStreamSvc.UpdateAccessToken(cred.AccessToken)
+			}
+		case domain.PlatformKick:
+			switch strings.ToLower(strings.TrimSpace(cred.Role)) {
+			case "streamer":
+				if kickStreamSvc != nil {
+					kickStreamSvc.UpdateAccessToken(cred.AccessToken)
+				}
+			case "bot":
+				if kickAd != nil {
+					kickAd.UpdateAccessToken(cred.AccessToken)
+				}
+			}
+		}
+	})
 
 	wsServer := ws.NewServer(wsConfig)
 
@@ -233,7 +264,7 @@ func main() {
 		ChatroomID:        chatroomID,
 	}
 
-	kickAd := kickadapter.NewAdapter(kickCfg)
+	kickAd = kickadapter.NewAdapter(kickCfg)
 
 	multiOut := outs.NewMultiSender()
 	multiOut.Register(domain.PlatformTwitch, twitchAd)
