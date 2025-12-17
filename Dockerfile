@@ -1,44 +1,66 @@
 #############################
-# Stage 1: build the bot
+# Stage 0: build the web (SvelteKit)
 #############################
-FROM golang:1.22-alpine AS builder
+FROM oven/bun:1 AS web_builder
 
-ENV GOTOOLCHAIN=go1.25.4
+WORKDIR /web
+
+ARG VITE_CHAT_WS_URL
+ARG VITE_API_BASE_URL
+ENV VITE_CHAT_WS_URL=${VITE_CHAT_WS_URL}
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+
+COPY web/bun.lock web/package.json ./
+RUN bun install --frozen-lockfile
+
+COPY web/ ./
+RUN bun run build
+
+
+#############################
+# Stage 1: build the bot (Go + SQLite, multi-arch SAFE)
+#############################
+FROM golang:1.25-bookworm AS builder
+
+# ENV GOTOOLCHAIN=go1.25.4
+ENV CGO_ENABLED=1
 
 WORKDIR /app
 
-RUN apk add --no-cache git build-base sqlite-dev
+# Toolchain CGO + sqlite (glibc, NO musl)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates \
+  gcc \
+  g++ \
+  libc6-dev \
+  pkg-config \
+  libsqlite3-dev \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-ENV CGO_ENABLED=1 \
-  CGO_CFLAGS="-D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64" \
-  CGO_LDFLAGS=""
-
-RUN GOOS=linux GOARCH=amd64 go build -o /app/bin/bot ./cmd/bot
+RUN go build -o /app/bin/bot ./cmd/bot
 
 #############################
-# Stage 2: final runtime
+# Stage 2: final runtime (NGINX + Debian)
 #############################
-FROM alpine:3.19
+FROM nginx:1.27-bookworm
 
-RUN apk add --no-cache ca-certificates busybox-extras sqlite-libs
+# Quitar config default
+RUN rm /etc/nginx/conf.d/default.conf
 
-ENV CHAT_WS_ADDR=:8080 \
-  STATIC_PORT=4173 \
-  STATIC_DIR=/srv/web \
-  BUSYBOX_BIN=/bin/busybox-extras
+# Config SPA + API + WS
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-WORKDIR /app
-
+# Bot + frontend
 COPY --from=builder /app/bin/bot /app/bot
-COPY docker-entrypoint.sh /usr/local/bin/entrypoint
-RUN chmod +x /usr/local/bin/entrypoint /app/bot
+COPY --from=web_builder /web/build /usr/share/nginx/html
 
-COPY web/build ${STATIC_DIR}
+# Entrypoint
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh /app/bot
 
-EXPOSE 8080 4173
-ENTRYPOINT ["sh", "/usr/local/bin/entrypoint"]
-
+EXPOSE 80 8080
+ENTRYPOINT ["/docker-entrypoint.sh"]

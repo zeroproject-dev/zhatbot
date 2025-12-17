@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"zhatBot/internal/domain"
@@ -47,16 +48,23 @@ func (c *TitleCommand) Handle(ctx context.Context, cmdCtx *Context) error {
 
 	title := strings.Join(cmdCtx.Args, " ")
 
-	// ✅ aquí está la magia
-	service := c.resolver.ForPlatform(msg.Platform)
-	if service == nil {
+	services := c.resolver.All()
+	if len(services) == 0 {
 		return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,
 			"⚠️ Esta plataforma no soporta cambiar el título.")
 	}
 
-	if err := service.SetTitle(ctx, title); err != nil {
+	var failed bool
+	for _, svc := range services {
+		if err := svc.SetTitle(ctx, title); err != nil {
+			log.Printf("title command: error setting title: %v", err)
+			failed = true
+		}
+	}
+
+	if failed {
 		return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,
-			"⚠️ Error al cambiar el título.")
+			"⚠️ No pude cambiar el título en alguna plataforma.")
 	}
 
 	return cmdCtx.Out.SendMessage(ctx, msg.Platform, msg.ChannelID,

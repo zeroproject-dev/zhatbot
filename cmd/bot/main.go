@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"zhatBot/internal/domain"
@@ -19,6 +20,7 @@ import (
 	ws "zhatBot/internal/interface/api/ws"
 	"zhatBot/internal/interface/outs"
 	"zhatBot/internal/usecase/commands"
+	credentialsusecase "zhatBot/internal/usecase/credentials"
 	"zhatBot/internal/usecase/handle_message"
 	"zhatBot/internal/usecase/stream"
 )
@@ -40,6 +42,23 @@ func main() {
 	}
 	defer credStore.Close()
 
+	refresher := credentialsusecase.NewRefresher(
+		credStore,
+		credentialsusecase.TwitchConfig{
+			ClientID:     c.TwitchClientId,
+			ClientSecret: c.TwitchClientSecret,
+		},
+		credentialsusecase.KickConfig{
+			ClientID:     c.KickClientID,
+			ClientSecret: c.KickClientSecret,
+			RedirectURI:  c.KickRedirectURI,
+		},
+	)
+
+	if err := refresher.RefreshAll(ctx); err != nil {
+		log.Printf("error refrescando tokens: %v", err)
+	}
+
 	if cred, err := credStore.Get(ctx, domain.PlatformTwitch, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
 		c.TwitchToken = cred.AccessToken
 	} else if err != nil {
@@ -57,16 +76,23 @@ func main() {
 		log.Printf("error obteniendo token de Twitch streamer desde DB: %v", err)
 	}
 
-	kickAccessToken := os.Getenv("KICK_BOT_TOKEN")
+	kickChatToken := os.Getenv("KICK_BOT_TOKEN")
 	if cred, err := credStore.Get(ctx, domain.PlatformKick, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
-		kickAccessToken = cred.AccessToken
+		kickChatToken = cred.AccessToken
 	} else if err != nil {
 		log.Printf("error obteniendo token de Kick bot desde DB: %v", err)
 	}
 
+	kickStreamToken := kickChatToken
+	if cred, err := credStore.Get(ctx, domain.PlatformKick, "streamer"); err == nil && cred != nil && cred.AccessToken != "" {
+		kickStreamToken = cred.AccessToken
+	} else if err != nil {
+		log.Printf("error obteniendo token de Kick streamer desde DB: %v", err)
+	}
+
 	cfg := twitchadapter.Config{
 		Username:   c.TwitchUsername,
-		OAuthToken: c.TwitchToken,
+		OAuthToken: formatTwitchOAuthToken(c.TwitchToken),
 		Channels:   c.TwitchChannels,
 	}
 
@@ -127,9 +153,13 @@ func main() {
 	)
 
 	// kickinfra.NewStreamService espera (KickStreamServiceConfig) y devuelve (svc, error).
+	if kickStreamToken == "" {
+		log.Fatal("No hay token de Kick disponible para actualizar el título")
+	}
+
 	kickSvc, err := kickinfra.NewStreamService(
 		kickinfra.KickStreamServiceConfig{
-			AccessToken: kickAccessToken,
+			AccessToken: kickStreamToken,
 			// si tu struct tiene más campos (RefreshToken, OwnerID...), añádelos aquí.
 			// RefreshToken: os.Getenv("KICK_BOT_REFRESH_TOKEN"),
 		},
@@ -176,8 +206,12 @@ func main() {
 		log.Fatalf("KICK_CHATROOM_ID inválido")
 	}
 
+	if kickChatToken == "" {
+		log.Fatal("No hay token de Kick disponible para el chat")
+	}
+
 	kickCfg := kickadapter.Config{
-		AccessToken:       kickAccessToken,
+		AccessToken:       kickChatToken,
 		BroadcasterUserID: broadcasterID,
 		ChatroomID:        chatroomID,
 	}
@@ -238,4 +272,14 @@ func main() {
 	<-ctx.Done()
 
 	log.Println("Bot apagado.")
+}
+
+func formatTwitchOAuthToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	if strings.HasPrefix(token, "oauth:") {
+		return token
+	}
+	return "oauth:" + token
 }
