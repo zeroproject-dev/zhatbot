@@ -29,6 +29,9 @@ func (r *Router) Register(cmd Command) {
 
 func (r *Router) SetCustomManager(manager *CustomCommandManager) {
 	r.customs = manager
+	if manager != nil {
+		manager.SetReservedChecker(r.isReservedCommand)
+	}
 }
 
 func (r *Router) Handle(ctx context.Context, msg domain.Message, out domain.OutgoingMessagePort) error {
@@ -84,4 +87,13 @@ func (r *Router) tryCustom(ctx context.Context, trigger string, msg domain.Messa
 		return false, nil
 	}
 	return r.customs.TryHandle(ctx, trigger, msg, out)
+}
+
+func (r *Router) isReservedCommand(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	_, ok := r.cmdIndex[name]
+	return ok
 }

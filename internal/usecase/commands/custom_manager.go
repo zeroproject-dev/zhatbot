@@ -16,6 +16,7 @@ type CustomCommandManager struct {
 	mu          sync.RWMutex
 	commands    map[string]*domain.CustomCommand
 	aliasToName map[string]string
+	isReserved  func(string) bool
 }
 
 type UpdateCustomCommandInput struct {
@@ -137,8 +138,16 @@ func (m *CustomCommandManager) Upsert(ctx context.Context, input UpdateCustomCom
 		return nil, false, fmt.Errorf("el contenido del comando es obligatorio")
 	}
 
+	proposedAliases := existing.Aliases
 	if input.HasAliases {
-		existing.Aliases = normalizeAliasList(input.Aliases)
+		proposedAliases = normalizeAliasList(input.Aliases)
+	}
+	if err := m.ensureNoConflicts(name, created, proposedAliases, input.HasAliases); err != nil {
+		return nil, false, err
+	}
+
+	if input.HasAliases {
+		existing.Aliases = proposedAliases
 	}
 	if input.HasPlatforms {
 		existing.Platforms = normalizePlatformList(input.Platforms)
@@ -186,6 +195,55 @@ func (m *CustomCommandManager) Delete(ctx context.Context, name string) (bool, e
 
 func normalizeCommandName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func (m *CustomCommandManager) ensureNoConflicts(name string, created bool, aliases []string, hasAliases bool) error {
+	if created && m.isReserved != nil && m.isReserved(name) {
+		return fmt.Errorf("el nombre %q está reservado por otro comando", name)
+	}
+
+	if hasAliases && m.isReserved != nil {
+		for _, alias := range aliases {
+			if alias == "" {
+				continue
+			}
+			if m.isReserved(alias) {
+				return fmt.Errorf("el alias %q está reservado por otro comando", alias)
+			}
+		}
+	}
+
+	for existingName, cmd := range m.commands {
+		if existingName == name {
+			if created {
+				return fmt.Errorf("ya existe un comando con ese nombre")
+			}
+			continue
+		}
+		if hasAliases {
+			for _, alias := range aliases {
+				if alias == "" {
+					continue
+				}
+				if alias == existingName {
+					return fmt.Errorf("el alias %q coincide con otro comando", alias)
+				}
+				for _, otherAlias := range cmd.Aliases {
+					if alias == normalizeCommandName(otherAlias) {
+						return fmt.Errorf("el alias %q ya está en uso", alias)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (m *CustomCommandManager) SetReservedChecker(fn func(string) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.isReserved = fn
 }
 
 func normalizeAliasList(values []string) []string {
