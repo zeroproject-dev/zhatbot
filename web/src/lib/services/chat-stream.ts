@@ -20,6 +20,7 @@ const initialState: ChatStreamState = {
 };
 
 let activeSocket: WebSocket | undefined;
+let sharedStream: Readable<ChatStreamState> | null = null;
 
 export const createChatStream = (options: ChatStreamOptions = {}): Readable<ChatStreamState> => {
 	return readable(initialState, (set) => {
@@ -131,6 +132,13 @@ export const createChatStream = (options: ChatStreamOptions = {}): Readable<Chat
 			cleanupSocket();
 		};
 	});
+};
+
+export const getSharedChatStream = (): Readable<ChatStreamState> => {
+	if (!sharedStream) {
+		sharedStream = createChatStream();
+	}
+	return sharedStream;
 };
 
 const sampleUsers = [

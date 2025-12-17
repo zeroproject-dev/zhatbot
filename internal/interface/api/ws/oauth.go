@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +27,16 @@ const (
 )
 
 type Config struct {
-	Addr           string
-	CredentialRepo domain.CredentialRepository
-	Twitch         *TwitchOAuthConfig
-	Kick           *KickOAuthConfig
+	Addr            string
+	CredentialRepo  domain.CredentialRepository
+	Twitch          *TwitchOAuthConfig
+	Kick            *KickOAuthConfig
+	CategoryManager CategoryManager
+}
+
+type CategoryManager interface {
+	Search(ctx context.Context, platform domain.Platform, query string) ([]domain.CategoryOption, error)
+	Update(ctx context.Context, platform domain.Platform, categoryName string) error
 }
 
 type TwitchOAuthConfig struct {
@@ -122,6 +127,7 @@ type apiHandlers struct {
 	twitchCfg *TwitchOAuthConfig
 	kickCfg   *KickOAuthConfig
 	kickOAuth *kicksdk.Client
+	category  CategoryManager
 }
 
 func newAPIHandlers(cfg Config) *apiHandlers {
@@ -145,6 +151,7 @@ func newAPIHandlers(cfg Config) *apiHandlers {
 		twitchCfg: cfg.Twitch,
 		kickCfg:   cfg.Kick,
 		kickOAuth: kickClient,
+		category:  cfg.CategoryManager,
 	}
 }
 
@@ -154,6 +161,10 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 	}
 
 	mux.HandleFunc("/api/oauth/status", a.withCORS(a.handleStatus))
+	if a.category != nil {
+		mux.HandleFunc("/api/categories/search", a.withCORS(a.handleCategorySearch))
+		mux.HandleFunc("/api/categories/update", a.withCORS(a.handleCategoryUpdate))
+	}
 
 	if a.twitchCfg != nil && a.twitchCfg.enabled() {
 		mux.HandleFunc("/api/oauth/twitch/start", a.withCORS(a.handleTwitchStart))
@@ -202,6 +213,15 @@ type statusResponse struct {
 	Credentials map[string]map[string]credentialStatus `json:"credentials"`
 }
 
+type categorySearchResponse struct {
+	Options []domain.CategoryOption `json:"options"`
+}
+
+type categoryUpdateRequest struct {
+	Platform string `json:"platform"`
+	Name     string `json:"name"`
+}
+
 func normalizeRole(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "streamer":
@@ -209,6 +229,84 @@ func normalizeRole(role string) string {
 	default:
 		return "bot"
 	}
+}
+
+func (a *apiHandlers) handleCategorySearch(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.category == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	platform := parsePlatformParam(r.URL.Query().Get("platform"))
+	if platform == "" {
+		writeError(w, http.StatusBadRequest, "invalid platform")
+		return
+	}
+
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "missing query")
+		return
+	}
+
+	options, err := a.category.Search(r.Context(), platform, query)
+	if err != nil {
+		log.Printf("category search error: %v", err)
+		writeError(w, http.StatusInternalServerError, "category search failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, categorySearchResponse{Options: options})
+}
+
+func (a *apiHandlers) handleCategoryUpdate(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.category == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	defer r.Body.Close()
+	var req categoryUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+
+	platform := parsePlatformParam(req.Platform)
+	if platform == "" {
+		writeError(w, http.StatusBadRequest, "invalid platform")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing name")
+		return
+	}
+
+	if err := a.category.Update(r.Context(), platform, name); err != nil {
+		log.Printf("category update error: %v", err)
+		writeError(w, http.StatusInternalServerError, "category update failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) {
@@ -317,6 +415,11 @@ type twitchTokenResponse struct {
 	Scope        []string `json:"scope"`
 }
 
+type twitchProfile struct {
+	ID    string `json:"id"`
+	Login string `json:"login"`
+}
+
 func (a *apiHandlers) exchangeTwitchToken(ctx context.Context, code, verifier string) (*twitchTokenResponse, error) {
 	data := url.Values{}
 	data.Set("client_id", a.twitchCfg.ClientID)
@@ -353,6 +456,48 @@ func (a *apiHandlers) exchangeTwitchToken(ctx context.Context, code, verifier st
 	}
 
 	return &payload, nil
+}
+
+func (a *apiHandlers) fetchTwitchProfile(ctx context.Context, accessToken string) (*twitchProfile, error) {
+	if a == nil || a.httpClient == nil {
+		return nil, fmt.Errorf("http client no configurado")
+	}
+	if a.twitchCfg == nil || a.twitchCfg.ClientID == "" {
+		return nil, fmt.Errorf("twitch client id vacío")
+	}
+	token := strings.TrimSpace(accessToken)
+	if token == "" {
+		return nil, fmt.Errorf("access token vacío")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.twitch.tv/helix/users", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Client-ID", a.twitchCfg.ClientID)
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("twitch profile request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("twitch profile request failed (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var payload struct {
+		Data []twitchProfile `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("twitch profile decode: %w", err)
+	}
+	if len(payload.Data) == 0 {
+		return nil, fmt.Errorf("twitch profile: respuesta vacía")
+	}
+	return &payload.Data[0], nil
 }
 
 func (a *apiHandlers) handleKickStart(w http.ResponseWriter, r *http.Request) {
@@ -489,6 +634,17 @@ func (a *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func parsePlatformParam(p string) domain.Platform {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case string(domain.PlatformTwitch):
+		return domain.PlatformTwitch
+	case string(domain.PlatformKick):
+		return domain.PlatformKick
+	default:
+		return ""
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

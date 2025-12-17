@@ -88,3 +88,33 @@ func (s *TwitchStreamService) UpdateCategory(ctx context.Context, broadcasterID,
 
 	return nil
 }
+
+func (s *TwitchStreamService) SearchCategories(ctx context.Context, query string) ([]domain.CategoryOption, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("empty query")
+	}
+
+	resp, err := s.client.SearchCategories(&helix.SearchCategoriesParams{
+		Query: query,
+		First: 25,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("helix: SearchCategories: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("helix: SearchCategories failed (%d: %s) %s",
+			resp.StatusCode, resp.Error, resp.ErrorMessage)
+	}
+
+	options := make([]domain.CategoryOption, 0, len(resp.Data.Categories))
+	for _, cat := range resp.Data.Categories {
+		options = append(options, domain.CategoryOption{
+			ID:   cat.ID,
+			Name: cat.Name,
+		})
+	}
+
+	return options, nil
+}

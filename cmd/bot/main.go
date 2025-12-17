@@ -23,6 +23,7 @@ import (
 	twitchadapter "zhatBot/internal/interface/adapters/twitch"
 	ws "zhatBot/internal/interface/api/ws"
 	"zhatBot/internal/interface/outs"
+	categoryusecase "zhatBot/internal/usecase/category"
 	"zhatBot/internal/usecase/commands"
 	credentialsusecase "zhatBot/internal/usecase/credentials"
 	"zhatBot/internal/usecase/handle_message"
@@ -130,15 +131,6 @@ func main() {
 		}
 	}
 
-	wsServer := ws.NewServer(wsConfig)
-
-	go func() {
-		log.Printf("Iniciando servidor WS")
-		if err := wsServer.Start(ctx); err != nil && err != context.Canceled {
-			log.Printf("ws server error: %v", err)
-		}
-	}()
-
 	// ---------- 1) Crear servicios de stream por plataforma ----------
 
 	// twitchinfra.NewStreamService espera (string, string) y devuelve (svc, error).
@@ -176,6 +168,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("error creando KickStreamService: %v", err)
 	}
+
+	categorySvc := categoryusecase.NewService(categoryusecase.Config{
+		Twitch:              twitchChannelSvc,
+		TwitchBroadcasterID: broadcasterID,
+		Kick:                kickSvc,
+	})
+	wsConfig.CategoryManager = categorySvc
+
+	wsServer := ws.NewServer(wsConfig)
+
+	go func() {
+		log.Printf("Iniciando servidor WS")
+		if err := wsServer.Start(ctx); err != nil && err != context.Canceled {
+			log.Printf("ws server error: %v", err)
+		}
+	}()
 
 	// ---------- 2) Resolver de servicios por plataforma ----------
 

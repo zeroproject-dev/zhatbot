@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import {
-		createChatStream,
+		getSharedChatStream,
 		sendChatCommand,
 		type ChatStreamState
 	} from '$lib/services/chat-stream';
@@ -9,7 +9,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import { getLocale } from '$lib/paraglide/runtime';
 
-	const chatStream = createChatStream();
+	const chatStream = getSharedChatStream();
 	let state: ChatStreamState = { messages: [], status: 'connecting' };
 	let scrollContainer: HTMLElement | null = null;
 	let draft = '';

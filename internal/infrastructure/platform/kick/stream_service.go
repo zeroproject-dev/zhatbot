@@ -3,6 +3,7 @@ package kickinfra
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	kicksdk "github.com/glichtv/kick-sdk"
@@ -89,4 +90,32 @@ func (s *KickStreamService) SetCategory(ctx context.Context, categoryName string
 	}
 
 	return nil
+}
+
+func (s *KickStreamService) SearchCategories(ctx context.Context, query string) ([]domain.CategoryOption, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("categoría vacía")
+	}
+
+	searchInput := kicksdk.SearchCategoriesInput{
+		Query: query,
+	}
+
+	resp, err := s.client.Categories().Search(ctx, searchInput)
+	if err != nil {
+		return nil, fmt.Errorf("kick: error buscando categorías: %w", err)
+	}
+
+	categories := resp.Payload
+
+	options := make([]domain.CategoryOption, 0, len(categories))
+	for _, cat := range categories {
+		options = append(options, domain.CategoryOption{
+			ID:   strconv.Itoa(cat.ID),
+			Name: cat.Name,
+		})
+	}
+
+	return options, nil
 }
