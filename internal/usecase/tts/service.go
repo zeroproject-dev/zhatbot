@@ -81,6 +81,9 @@ func (s *Service) RequestSpeech(ctx context.Context, text, requestedBy string, p
 	if text == "" {
 		return fmt.Errorf("texto vacío")
 	}
+	if !s.isEnabled(ctx) {
+		return fmt.Errorf("el TTS está desactivado")
+	}
 	if s.publisher == nil {
 		return fmt.Errorf("tts publisher no disponible")
 	}
@@ -179,4 +182,22 @@ func (s *Service) fetchChunk(text, voice string) ([]byte, error) {
 
 func normalizeVoice(code string) string {
 	return strings.ToLower(strings.TrimSpace(code))
+}
+
+func (s *Service) isEnabled(ctx context.Context) bool {
+	if s.repo == nil {
+		return true
+	}
+	enabled, err := s.repo.GetTTSEnabled(ctx)
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
+func (s *Service) SetEnabled(ctx context.Context, enabled bool) error {
+	if s.repo == nil {
+		return nil
+	}
+	return s.repo.SetTTSEnabled(ctx, enabled)
 }

@@ -23,4 +23,6 @@ type TTSEventPublisher interface {
 type TTSSettingsRepository interface {
 	SetTTSVoice(ctx context.Context, voice string) error
 	GetTTSVoice(ctx context.Context) (string, error)
+	SetTTSEnabled(ctx context.Context, enabled bool) error
+	GetTTSEnabled(ctx context.Context) (bool, error)
 }

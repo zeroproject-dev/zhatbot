@@ -45,11 +45,7 @@ func (c *TTSCommand) Handle(ctx context.Context, cmdCtx *Context) error {
 	case lower == "voice:list":
 		return c.handleList(ctx, cmdCtx)
 	case strings.HasPrefix(lower, "voice:"):
-		code := strings.TrimSpace(first[len("voice:"):])
-		if code == "" && len(cmdCtx.Args) > 1 {
-			code = strings.TrimSpace(cmdCtx.Args[1])
-		}
-		return c.handleSetVoice(ctx, cmdCtx, code)
+		return c.handleVoiceSubcommand(ctx, cmdCtx, first)
 	default:
 		text := strings.Join(cmdCtx.Args, " ")
 		return c.handleRequest(ctx, cmdCtx, text)
@@ -101,5 +97,36 @@ func (c *TTSCommand) handleRequest(ctx context.Context, cmdCtx *Context, text st
 
 func (c *TTSCommand) usage(ctx context.Context, cmdCtx *Context) error {
 	return cmdCtx.Out.SendMessage(ctx, cmdCtx.Message.Platform, cmdCtx.Message.ChannelID,
-		"Uso: !tts voice:list | !tts voice:<id> | !tts <texto>")
+		"Uso: !tts voice:list | !tts voice:<id|start|stop> | !tts <texto>")
+}
+
+func (c *TTSCommand) handleVoiceSubcommand(ctx context.Context, cmdCtx *Context, token string) error {
+	if !cmdCtx.Message.IsPlatformAdmin {
+		return nil
+	}
+
+	value := strings.TrimSpace(token[len("voice:"):])
+	if value == "" && len(cmdCtx.Args) > 1 {
+		value = strings.TrimSpace(cmdCtx.Args[1])
+	}
+	valueLower := strings.ToLower(value)
+
+	switch valueLower {
+	case "start":
+		if err := c.service.SetEnabled(ctx, true); err != nil {
+			return cmdCtx.Out.SendMessage(ctx, cmdCtx.Message.Platform, cmdCtx.Message.ChannelID,
+				fmt.Sprintf("⚠️ %v", err))
+		}
+		return cmdCtx.Out.SendMessage(ctx, cmdCtx.Message.Platform, cmdCtx.Message.ChannelID,
+			"✅ TTS activado.")
+	case "stop":
+		if err := c.service.SetEnabled(ctx, false); err != nil {
+			return cmdCtx.Out.SendMessage(ctx, cmdCtx.Message.Platform, cmdCtx.Message.ChannelID,
+				fmt.Sprintf("⚠️ %v", err))
+		}
+		return cmdCtx.Out.SendMessage(ctx, cmdCtx.Message.Platform, cmdCtx.Message.ChannelID,
+			"🛑 TTS desactivado.")
+	default:
+		return c.handleSetVoice(ctx, cmdCtx, valueLower)
+	}
 }

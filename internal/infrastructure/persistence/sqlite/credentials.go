@@ -426,6 +426,7 @@ func (s *CredentialStore) DeleteCustomCommand(ctx context.Context, name string) 
 // ----- TTS Settings -----
 
 const ttsVoiceKey = "tts_voice"
+const ttsEnabledKey = "tts_enabled"
 
 func (s *CredentialStore) SetTTSVoice(ctx context.Context, voice string) error {
 	return s.setSetting(ctx, ttsVoiceKey, voice)
@@ -433,6 +434,22 @@ func (s *CredentialStore) SetTTSVoice(ctx context.Context, voice string) error {
 
 func (s *CredentialStore) GetTTSVoice(ctx context.Context) (string, error) {
 	return s.getSetting(ctx, ttsVoiceKey)
+}
+
+func (s *CredentialStore) SetTTSEnabled(ctx context.Context, enabled bool) error {
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	return s.setSetting(ctx, ttsEnabledKey, value)
+}
+
+func (s *CredentialStore) GetTTSEnabled(ctx context.Context) (bool, error) {
+	val, err := s.getSetting(ctx, ttsEnabledKey)
+	if err != nil {
+		return false, err
+	}
+	return strings.ToLower(strings.TrimSpace(val)) != "false", nil
 }
 
 func (s *CredentialStore) setSetting(ctx context.Context, key, value string) error {
