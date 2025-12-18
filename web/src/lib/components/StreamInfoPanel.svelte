@@ -11,6 +11,7 @@
 		type CategoryOption,
 		type Platform
 	} from '$lib/services/categories';
+	import TTSMonitor from '$lib/components/TTSMonitor.svelte';
 
 	type Feedback = { type: 'success' | 'error'; message: string };
 
@@ -209,6 +210,8 @@
 				</p>
 			{/if}
 		</article>
+
+		<TTSMonitor />
 
 		<div class="space-y-2">
 			<div class="flex items-center justify-between">

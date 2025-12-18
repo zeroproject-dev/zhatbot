@@ -269,3 +269,45 @@ func (s *Server) PublishMessage(ctx context.Context, msg domain.Message) error {
 
 	return nil
 }
+
+func (s *Server) PublishTTSEvent(ctx context.Context, event domain.TTSEvent) error {
+	envelope := struct {
+		Type string          `json:"type"`
+		Data domain.TTSEvent `json:"data"`
+	}{
+		Type: "tts",
+		Data: event,
+	}
+
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	clients := make([]*wsClient, 0, len(s.clients))
+	for c := range s.clients {
+		clients = append(clients, c)
+	}
+	s.mu.RUnlock()
+
+	for _, c := range clients {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if err := c.writeJSON(json.RawMessage(payload)); err != nil {
+			log.Printf("ws: removing client due to write error: %v", err)
+			s.mu.Lock()
+			delete(s.clients, c)
+			s.mu.Unlock()
+			c.conn.Close()
+		}
+	}
+
+	return nil
+}
+
+var _ domain.TTSEventPublisher = (*Server)(nil)

@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import { readable, type Readable } from 'svelte/store';
 import type { ChatCommandPayload, ChatMessage, ChatStreamStatus } from '$lib/types/chat';
 import { WS_URL } from '$lib/config';
+import { ttsQueue, type TTSEvent } from '$lib/stores/tts';
 
 interface ChatStreamOptions {
 	url?: string;
@@ -115,6 +116,9 @@ export const createChatStream = (options: ChatStreamOptions = {}): Readable<Chat
 			socket.addEventListener('message', (event) => {
 				try {
 					const parsed = JSON.parse(event.data) as unknown;
+					if (handleAppEvent(parsed)) {
+						return;
+					}
 					const normalized = normalizeMessagePayload(parsed);
 					push(normalized);
 				} catch (error) {
@@ -194,36 +198,13 @@ export const normalizeMessagePayload = (payload: unknown): ChatMessage => {
 
 	const source = payload as Record<string, unknown>;
 
-	const getString = (...keys: string[]) => {
-		for (const key of keys) {
-			const value = source[key];
-			if (typeof value === 'string') {
-				return value;
-			}
-		}
-		return '';
-	};
-
-	const getBoolean = (...keys: string[]) => {
-		for (const key of keys) {
-			const value = source[key];
-			if (typeof value === 'boolean') {
-				return value;
-			}
-			if (typeof value === 'number') {
-				return Boolean(value);
-			}
-		}
-		return false;
-	};
-
-	const platform = getString('platform', 'Platform') || 'unknown';
-	const channel_id = getString('channel_id', 'ChannelID', 'channelId', 'channel');
-	const user_id = getString('user_id', 'UserID', 'userId');
-	const username = getString('username', 'Username', 'userName') || 'Guest';
-	const text = getString('text', 'Text');
+	const platform = getStringField(source, 'platform', 'Platform') || 'unknown';
+	const channel_id = getStringField(source, 'channel_id', 'ChannelID', 'channelId', 'channel');
+	const user_id = getStringField(source, 'user_id', 'UserID', 'userId');
+	const username = getStringField(source, 'username', 'Username', 'userName') || 'Guest';
+	const text = getStringField(source, 'text', 'Text');
 	const received_at =
-		getString('received_at', 'ReceivedAt', 'receivedAt') || new Date().toISOString();
+		getStringField(source, 'received_at', 'ReceivedAt', 'receivedAt') || new Date().toISOString();
 
 	return {
 		platform,
@@ -231,11 +212,11 @@ export const normalizeMessagePayload = (payload: unknown): ChatMessage => {
 		user_id: user_id || crypto.randomUUID(),
 		username,
 		text,
-		is_private: getBoolean('is_private', 'IsPrivate'),
-		is_platform_owner: getBoolean('is_platform_owner', 'IsPlatformOwner'),
-		is_platform_admin: getBoolean('is_platform_admin', 'IsPlatformAdmin'),
-		is_platform_mod: getBoolean('is_platform_mod', 'IsPlatformMod'),
-		is_platform_vip: getBoolean('is_platform_vip', 'IsPlatformVip'),
+		is_private: getBooleanField(source, 'is_private', 'IsPrivate'),
+		is_platform_owner: getBooleanField(source, 'is_platform_owner', 'IsPlatformOwner'),
+		is_platform_admin: getBooleanField(source, 'is_platform_admin', 'IsPlatformAdmin'),
+		is_platform_mod: getBooleanField(source, 'is_platform_mod', 'IsPlatformMod'),
+		is_platform_vip: getBooleanField(source, 'is_platform_vip', 'IsPlatformVip'),
 		received_at
 	};
 };
@@ -268,3 +249,78 @@ const normalizeWsUrl = (input?: string) => {
 	if (input.startsWith('https://')) return input.replace('https://', 'wss://');
 	return input;
 };
+
+const handleAppEvent = (payload: unknown): boolean => {
+	if (!isPlainObject(payload)) {
+		return false;
+	}
+	const type = typeof payload.type === 'string' ? payload.type : '';
+	if (!type) return false;
+
+	if (type === 'tts') {
+		const event = normalizeTTSEvent(payload.data);
+		console.debug('[chat-stream] Evento TTS recibido', event);
+		ttsQueue.push(event);
+		return true;
+	}
+
+	return false;
+};
+
+const normalizeTTSEvent = (data: unknown): TTSEvent => {
+	if (!isPlainObject(data)) {
+		console.warn('[chat-stream] Evento TTS sin payload válido', data);
+		return {
+			voice: '',
+			voice_label: '',
+			text: '',
+			requested_by: '',
+			platform: '',
+			channel_id: '',
+			timestamp: new Date().toISOString(),
+			audio_base64: ''
+		};
+	}
+
+	return {
+		voice: getStringField(data, 'voice'),
+		voice_label: getStringField(data, 'voice_label'),
+		text: getStringField(data, 'text'),
+		requested_by: getStringField(data, 'requested_by'),
+		platform: getStringField(data, 'platform'),
+		channel_id: getStringField(data, 'channel_id'),
+		timestamp: getStringField(data, 'timestamp') || new Date().toISOString(),
+		audio_base64: getStringField(data, 'audio_base64')
+	};
+};
+
+const getStringField = (source: Record<string, unknown>, ...keys: string[]) => {
+	for (const key of keys) {
+		const value = source[key];
+		if (typeof value === 'string') {
+			return value;
+		}
+	}
+	return '';
+};
+
+const getBooleanField = (source: Record<string, unknown>, ...keys: string[]) => {
+	for (const key of keys) {
+		const value = source[key];
+		if (typeof value === 'boolean') {
+			return value;
+		}
+		if (typeof value === 'number') {
+			return Boolean(value);
+		}
+		if (typeof value === 'string') {
+			const lower = value.toLowerCase();
+			if (lower === 'true') return true;
+			if (lower === 'false') return false;
+		}
+	}
+	return false;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+	typeof value === 'object' && value !== null;

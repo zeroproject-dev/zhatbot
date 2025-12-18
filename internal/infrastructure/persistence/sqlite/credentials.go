@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS custom_commands (
 		return fmt.Errorf("sqlite: migrate custom_commands: %w", err)
 	}
 
+	const settingsTable = `
+CREATE TABLE IF NOT EXISTS settings (
+	key TEXT PRIMARY KEY,
+	value TEXT,
+	updated_at TIMESTAMP NOT NULL
+);`
+
+	if _, err := db.Exec(settingsTable); err != nil {
+		return fmt.Errorf("sqlite: migrate settings: %w", err)
+	}
+
 	return nil
 }
 
@@ -411,3 +422,57 @@ func (s *CredentialStore) DeleteCustomCommand(ctx context.Context, name string) 
 	}
 	return nil
 }
+
+// ----- TTS Settings -----
+
+const ttsVoiceKey = "tts_voice"
+
+func (s *CredentialStore) SetTTSVoice(ctx context.Context, voice string) error {
+	return s.setSetting(ctx, ttsVoiceKey, voice)
+}
+
+func (s *CredentialStore) GetTTSVoice(ctx context.Context) (string, error) {
+	return s.getSetting(ctx, ttsVoiceKey)
+}
+
+func (s *CredentialStore) setSetting(ctx context.Context, key, value string) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("sqlite: empty setting key")
+	}
+
+	now := time.Now().UTC()
+	const stmt = `
+INSERT INTO settings (key, value, updated_at)
+VALUES (?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET
+	value=excluded.value,
+	updated_at=excluded.updated_at;
+`
+
+	if _, err := s.db.ExecContext(ctx, stmt, key, value, now); err != nil {
+		return fmt.Errorf("sqlite: set setting: %w", err)
+	}
+
+	return nil
+}
+
+func (s *CredentialStore) getSetting(ctx context.Context, key string) (string, error) {
+	if strings.TrimSpace(key) == "" {
+		return "", fmt.Errorf("sqlite: empty setting key")
+	}
+
+	const query = `SELECT value FROM settings WHERE key = ? LIMIT 1;`
+	row := s.db.QueryRowContext(ctx, query, key)
+
+	var value sql.NullString
+	if err := row.Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("sqlite: get setting: %w", err)
+	}
+
+	return value.String, nil
+}
+
+var _ domain.TTSSettingsRepository = (*CredentialStore)(nil)

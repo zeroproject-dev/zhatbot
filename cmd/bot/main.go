@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,7 @@ import (
 	credentialsusecase "zhatBot/internal/usecase/credentials"
 	"zhatBot/internal/usecase/handle_message"
 	"zhatBot/internal/usecase/stream"
+	ttsusecase "zhatBot/internal/usecase/tts"
 )
 
 func main() {
@@ -233,6 +235,8 @@ func main() {
 	// Comandos genéricos
 	router.Register(commands.NewPingCommand())
 	router.Register(commands.NewManageCustomCommand(customManager))
+	ttsService := ttsusecase.NewService(credStore, wsServer, filepath.Join("data", "tts"))
+	router.Register(commands.NewTTSCommand(ttsService))
 
 	// Comando title (único, multi-plataforma)
 	router.Register(
