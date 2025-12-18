@@ -157,7 +157,7 @@
 				onclick={loadStatus}
 				disabled={statusLoading}
 			>
-				{statusLoading ? '…' : 'refresh'}
+				{statusLoading ? '…' : m.general_refresh()}
 			</button>
 		</div>
 	</header>

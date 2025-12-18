@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { locales, localizeHref } from '$lib/paraglide/runtime';
 	import { m } from '$lib/paraglide/messages.js';
+	import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
 	import { theme, toggleTheme, initTheme } from '$lib/stores/theme';
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
@@ -21,25 +22,30 @@
 {#if isStandaloneChat}
 	{@render children()}
 {:else}
-	<div class="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
-		<header class="flex items-center justify-between border-b border-slate-200/70 px-6 py-4 dark:border-slate-800/80">
-			<div>
-				<p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{m.brand_tagline()}</p>
-				<h1 class="text-xl font-semibold">{m.dashboard_title()}</h1>
-			</div>
-			<button
-				class="inline-flex items-center gap-2 rounded-full border border-slate-200/70 px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-				onclick={toggleTheme}
-				type="button"
-				aria-live="polite"
-				aria-label={m.theme_toggle_aria()}
-			>
-				<span class="h-4 w-4 rounded-full border border-slate-300 bg-gradient-to-tr from-amber-200 to-amber-400 shadow-inner dark:hidden"></span>
-				<span class="hidden h-4 w-4 items-center justify-center rounded-full bg-slate-800 text-xs text-amber-200 dark:flex">☾</span>
-				{$theme === 'light' ? m.theme_toggle_dark() : m.theme_toggle_light()}
-			</button>
-		</header>
-		<main class="flex-1 p-6">{@render children()}</main>
+	<div class="min-h-screen bg-slate-50/90 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
+		<div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col">
+			<header class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/70 px-6 py-4 dark:border-slate-800/80">
+				<div>
+					<p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{m.brand_tagline()}</p>
+					<h1 class="text-xl font-semibold">{m.dashboard_title()}</h1>
+				</div>
+				<div class="flex items-center gap-3">
+					<LanguageSwitcher />
+					<button
+						class="inline-flex items-center gap-2 rounded-full border border-slate-200/70 px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+						onclick={toggleTheme}
+						type="button"
+						aria-live="polite"
+						aria-label={m.theme_toggle_aria()}
+					>
+						<span class="h-4 w-4 rounded-full border border-slate-300 bg-gradient-to-tr from-amber-200 to-amber-400 shadow-inner dark:hidden"></span>
+						<span class="hidden h-4 w-4 items-center justify-center rounded-full bg-slate-800 text-xs text-amber-200 dark:flex">☾</span>
+						{$theme === 'light' ? m.theme_toggle_dark() : m.theme_toggle_light()}
+					</button>
+				</div>
+			</header>
+			<main class="flex-1 px-6 py-6">{@render children()}</main>
+		</div>
 	</div>
 {/if}
 

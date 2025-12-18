@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { m } from '$lib/paraglide/messages.js';
 	import { fetchTTSStatus, updateTTSSettings, type TTSStatus } from '$lib/services/tts';
 	import { ttsVolume } from '$lib/stores/tts';
 
@@ -17,7 +18,7 @@
 			status = await fetchTTSStatus();
 		} catch (err) {
 			console.error('tts status failed', err);
-			error = 'No se pudo cargar el estado de TTS.';
+			error = m.tts_controls_error_status();
 		} finally {
 			loading = false;
 		}
@@ -30,7 +31,7 @@
 			status = await updateTTSSettings({ enabled: !status.enabled });
 		} catch (err) {
 			console.error('tts toggle failed', err);
-			error = 'No se pudo actualizar el estado.';
+			error = m.tts_controls_error_toggle();
 		} finally {
 			saving = false;
 		}
@@ -43,7 +44,7 @@
 			status = await updateTTSSettings({ voice });
 		} catch (err) {
 			console.error('tts voice failed', err);
-			error = 'No se pudo cambiar la voz.';
+			error = m.tts_controls_error_voice();
 		} finally {
 			saving = false;
 		}
@@ -58,22 +59,22 @@
 	});
 </script>
 
-<article class="rounded-2xl border border-slate-200/60 bg-white/80 p-4 text-slate-900 shadow-inner dark:border-slate-800 dark:bg-slate-900/70 dark:text-white">
+<article class="rounded-2xl border border-slate-200/70 bg-white/90 p-4 text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-white">
 	<header class="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-		<span>TTS Control</span>
+		<span>{m.tts_controls_title()}</span>
 		<button
 			type="button"
 			class="text-[11px] uppercase text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
 			onclick={() => loadStatus()}
 			disabled={loading}
 		>
-			{loading ? '…' : 'refresh'}
+			{loading ? '…' : m.general_refresh()}
 		</button>
 	</header>
 
 	<div class="mt-3 space-y-4 text-sm">
 		<div class="flex items-center justify-between">
-			<span>Estado TTS</span>
+			<span>{m.tts_controls_state()}</span>
 			<label class="relative inline-flex cursor-pointer items-center">
 				<input
 					type="checkbox"
@@ -88,7 +89,7 @@
 		</div>
 
 		<div>
-			<label for="tts-voice" class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Voz</label>
+			<label for="tts-voice" class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{m.tts_controls_voice_label()}</label>
 			<select
 				id="tts-voice"
 				class="mt-1 w-full rounded-xl border border-slate-200 bg-white/60 px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900/50 dark:text-white"
@@ -101,14 +102,14 @@
 						<option value={voice.code}>{voice.label}</option>
 					{/each}
 				{:else}
-					<option>Cargando...</option>
+					<option>{m.general_loading()}</option>
 				{/if}
 			</select>
 		</div>
 
 		<div>
 			<label for="tts-volume" class="flex items-center justify-between text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-				<span>Volumen</span>
+				<span>{m.tts_controls_volume_label()}</span>
 				<span>{Math.round((volume ?? 1) * 100)}%</span>
 			</label>
 			<input

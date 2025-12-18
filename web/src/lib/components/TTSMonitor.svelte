@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { m } from '$lib/paraglide/messages.js';
 	import { ttsQueue, type TTSEvent, ttsVolume } from '$lib/stores/tts';
 
 	const events = $derived($ttsQueue as TTSEvent[]);
@@ -16,20 +17,20 @@
 
 	const playEvent = async (event: TTSEvent | undefined, reason: 'auto' | 'manual' | 'history') => {
 		if (!event?.audio_base64) {
-			console.warn(`[tts] intento de reproducción sin audio disponible (${reason})`, event);
+			console.warn(`[tts] playback requested without audio (${reason})`, event);
 			return;
 		}
 		const src = `data:audio/mpeg;base64,${event.audio_base64}`;
 		try {
-			console.debug(`[tts] inicializando reproducción (${reason})`, event);
+			console.debug(`[tts] initializing playback (${reason})`, event);
 			const audio = new Audio(src);
 			const vol = typeof volume === 'number' ? volume : 1;
 			audio.volume = Math.min(Math.max(vol, 0), 1);
-			audio.onplay = () => console.debug(`[tts] reproduciendo audio (${reason})`);
-			audio.onended = () => console.debug(`[tts] audio finalizado (${reason})`);
+			audio.onplay = () => console.debug(`[tts] playing audio (${reason})`);
+			audio.onended = () => console.debug(`[tts] audio finished (${reason})`);
 			await audio.play();
 		} catch (error) {
-			console.error(`No se pudo reproducir el TTS (${reason})`, error, event);
+			console.error(`tts playback failed (${reason})`, error, event);
 		}
 	};
 
@@ -41,16 +42,16 @@
 	});
 </script>
 
-<article class="rounded-2xl border border-slate-200/60 bg-white/80 p-4 text-slate-900 shadow-inner dark:border-slate-800 dark:bg-slate-900/70 dark:text-white">
+<article class="rounded-2xl border border-slate-200/70 bg-white/90 p-4 text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-white">
 	<header class="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-		<span>TTS</span>
+		<span>{m.tts_monitor_title()}</span>
 		{#if latest}
 			<button
 				type="button"
 				class="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-white/10"
 				onclick={() => playEvent(latest, 'manual')}
 			>
-				Reproducir
+				{m.tts_monitor_play_latest()}
 			</button>
 		{/if}
 	</header>
@@ -64,7 +65,7 @@
 			</p>
 		</div>
 	{:else}
-		<p class="mt-3 text-sm text-slate-500 dark:text-slate-400">Aún no llegan peticiones de TTS.</p>
+		<p class="mt-3 text-sm text-slate-500 dark:text-slate-400">{m.tts_monitor_empty()}</p>
 	{/if}
 
 	{#if events.length > 1}
@@ -79,7 +80,7 @@
 						class="rounded-full border border-slate-300 px-2 py-1 text-xs dark:border-slate-700"
 						onclick={() => playEvent(event, 'history')}
 					>
-						▶️
+						{m.tts_monitor_history_play()}
 					</button>
 				</li>
 			{/each}

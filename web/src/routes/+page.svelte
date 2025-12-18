@@ -4,11 +4,11 @@
 	import StreamInfoPanel from '$lib/components/StreamInfoPanel.svelte';
 </script>
 
-<div class="flex flex-col gap-6 lg:h-[calc(100vh-180px)] lg:flex-row">
+<div class="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
 	<section class="flex flex-1">
 		<ChatPanel />
 	</section>
-	<section class="flex flex-1 basis-1/3">
+	<section class="flex flex-1">
 		<div class="flex w-full flex-col gap-6">
 			<AuthActions />
 			<StreamInfoPanel />
