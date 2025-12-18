@@ -201,3 +201,7 @@ func (s *Service) SetEnabled(ctx context.Context, enabled bool) error {
 	}
 	return s.repo.SetTTSEnabled(ctx, enabled)
 }
+
+func (s *Service) Enabled(ctx context.Context) bool {
+	return s.isEnabled(ctx)
+}

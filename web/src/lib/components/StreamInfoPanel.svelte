@@ -1,17 +1,18 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import {
-		getSharedChatStream,
-		sendChatCommand,
-		type ChatStreamState
-	} from '$lib/services/chat-stream';
-	import {
-		searchCategories,
-		updateCategory,
-		type CategoryOption,
-		type Platform
-	} from '$lib/services/categories';
-	import TTSMonitor from '$lib/components/TTSMonitor.svelte';
+import {
+	getSharedChatStream,
+	sendChatCommand,
+	type ChatStreamState
+} from '$lib/services/chat-stream';
+import {
+	searchCategories,
+	updateCategory,
+	type CategoryOption,
+	type Platform
+} from '$lib/services/categories';
+import TTSMonitor from '$lib/components/TTSMonitor.svelte';
+import TTSControls from '$lib/components/TTSControls.svelte';
 
 	type Feedback = { type: 'success' | 'error'; message: string };
 
@@ -211,7 +212,10 @@
 			{/if}
 		</article>
 
-		<TTSMonitor />
+		<div class="grid gap-4 md:grid-cols-2">
+			<TTSMonitor />
+			<TTSControls />
+		</div>
 
 		<div class="space-y-2">
 			<div class="flex items-center justify-between">

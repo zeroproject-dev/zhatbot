@@ -211,13 +211,6 @@ func main() {
 
 	wsServer := ws.NewServer(wsConfig)
 
-	go func() {
-		log.Printf("Iniciando servidor WS")
-		if err := wsServer.Start(ctx); err != nil && err != context.Canceled {
-			log.Printf("ws server error: %v", err)
-		}
-	}()
-
 	// ---------- 2) Resolver de servicios por plataforma ----------
 
 	resolver := stream.NewResolver(twitchTitleSvc, kickSvc)
@@ -236,6 +229,7 @@ func main() {
 	router.Register(commands.NewPingCommand())
 	router.Register(commands.NewManageCustomCommand(customManager))
 	ttsService := ttsusecase.NewService(credStore, wsServer, filepath.Join("data", "tts"))
+	wsServer.SetTTSManager(ttsService)
 	router.Register(commands.NewTTSCommand(ttsService))
 
 	// Comando title (único, multi-plataforma)
@@ -313,6 +307,13 @@ func main() {
 	wsServer.SetHandler(dispatch)
 	twitchAd.SetHandler(dispatch)
 	kickAd.SetHandler(dispatch)
+
+	go func() {
+		log.Printf("Iniciando servidor WS")
+		if err := wsServer.Start(ctx); err != nil && err != context.Canceled {
+			log.Printf("ws server error: %v", err)
+		}
+	}()
 
 	log.Println("Iniciando bot...")
 

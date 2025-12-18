@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { ttsQueue, type TTSEvent } from '$lib/stores/tts';
+	import { ttsQueue, type TTSEvent, ttsVolume } from '$lib/stores/tts';
 
 	const events = $derived($ttsQueue as TTSEvent[]);
 	const latest = $derived(events.at(0));
+	const volume = $derived($ttsVolume as number);
 
 	const formatTime = (iso?: string) => {
 		if (!iso) return '';
@@ -11,33 +12,32 @@
 		return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	};
 
-	const audioSrc = $derived(
-		latest?.audio_base64 ? `data:audio/mpeg;base64,${latest.audio_base64}` : ''
-	);
-
 	let lastAutoPlayed = $state<string | null>(null);
 
-	const playLatest = async (reason: 'auto' | 'manual' = 'manual') => {
-		if (!audioSrc) {
-			console.warn(`[tts] intento de reproducción sin audio disponible (${reason})`, latest);
+	const playEvent = async (event: TTSEvent | undefined, reason: 'auto' | 'manual' | 'history') => {
+		if (!event?.audio_base64) {
+			console.warn(`[tts] intento de reproducción sin audio disponible (${reason})`, event);
 			return;
 		}
+		const src = `data:audio/mpeg;base64,${event.audio_base64}`;
 		try {
-			console.debug(`[tts] inicializando reproducción (${reason})`, latest);
-			const audio = new Audio(audioSrc);
+			console.debug(`[tts] inicializando reproducción (${reason})`, event);
+			const audio = new Audio(src);
+			const vol = typeof volume === 'number' ? volume : 1;
+			audio.volume = Math.min(Math.max(vol, 0), 1);
 			audio.onplay = () => console.debug(`[tts] reproduciendo audio (${reason})`);
 			audio.onended = () => console.debug(`[tts] audio finalizado (${reason})`);
 			await audio.play();
 		} catch (error) {
-			console.error(`No se pudo reproducir el TTS (${reason})`, error, latest);
+			console.error(`No se pudo reproducir el TTS (${reason})`, error, event);
 		}
 	};
 
 	$effect(() => {
-		if (!latest?.timestamp || !audioSrc) return;
+		if (!latest?.timestamp || !latest.audio_base64) return;
 		if (latest.timestamp === lastAutoPlayed) return;
 		lastAutoPlayed = latest.timestamp;
-		void playLatest('auto');
+		void playEvent(latest, 'auto');
 	});
 </script>
 
@@ -48,7 +48,7 @@
 			<button
 				type="button"
 				class="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-white/10"
-				onclick={() => playLatest()}
+				onclick={() => playEvent(latest, 'manual')}
 			>
 				Reproducir
 			</button>
@@ -69,10 +69,18 @@
 
 	{#if events.length > 1}
 		<ul class="mt-4 space-y-1 text-xs text-slate-500 dark:text-slate-400">
-			{#each events.slice(1, 4) as event}
-				<li class="flex items-center justify-between rounded-xl bg-slate-100/40 px-3 py-1 dark:bg-white/5">
-					<span class="truncate">{event.requested_by}: {event.text}</span>
-					<span>{event.voice}</span>
+			{#each events.slice(1, 10) as event}
+				<li class="flex items-center justify-between gap-2 rounded-xl bg-slate-100/40 px-3 py-1 dark:bg-white/5">
+					<div class="flex-1 truncate">
+						<span class="font-semibold">{event.requested_by}</span>: {event.text}
+					</div>
+					<button
+						type="button"
+						class="rounded-full border border-slate-300 px-2 py-1 text-xs dark:border-slate-700"
+						onclick={() => playEvent(event, 'history')}
+					>
+						▶️
+					</button>
 				</li>
 			{/each}
 		</ul>

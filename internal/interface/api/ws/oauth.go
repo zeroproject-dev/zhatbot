@@ -19,6 +19,7 @@ import (
 	kicksdk "github.com/glichtv/kick-sdk"
 
 	"zhatBot/internal/domain"
+	ttsusecase "zhatBot/internal/usecase/tts"
 )
 
 const (
@@ -32,11 +33,20 @@ type Config struct {
 	Twitch          *TwitchOAuthConfig
 	Kick            *KickOAuthConfig
 	CategoryManager CategoryManager
+	TTSManager      TTSManager
 }
 
 type CategoryManager interface {
 	Search(ctx context.Context, platform domain.Platform, query string) ([]domain.CategoryOption, error)
 	Update(ctx context.Context, platform domain.Platform, categoryName string) error
+}
+
+type TTSManager interface {
+	ListVoices() []ttsusecase.VoiceOption
+	CurrentVoice(ctx context.Context) ttsusecase.VoiceOption
+	Enabled(ctx context.Context) bool
+	SetVoice(ctx context.Context, code string) (ttsusecase.VoiceOption, error)
+	SetEnabled(ctx context.Context, enabled bool) error
 }
 
 type TwitchOAuthConfig struct {
@@ -128,6 +138,7 @@ type apiHandlers struct {
 	kickCfg   *KickOAuthConfig
 	kickOAuth *kicksdk.Client
 	category  CategoryManager
+	tts       TTSManager
 }
 
 func newAPIHandlers(cfg Config) *apiHandlers {
@@ -152,6 +163,7 @@ func newAPIHandlers(cfg Config) *apiHandlers {
 		kickCfg:   cfg.Kick,
 		kickOAuth: kickClient,
 		category:  cfg.CategoryManager,
+		tts:       cfg.TTSManager,
 	}
 }
 
@@ -165,6 +177,10 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 		mux.HandleFunc("/api/categories/search", a.withCORS(a.handleCategorySearch))
 		mux.HandleFunc("/api/categories/update", a.withCORS(a.handleCategoryUpdate))
 	}
+	if a.tts != nil {
+		mux.HandleFunc("/api/tts/status", a.withCORS(a.handleTTSStatus))
+		mux.HandleFunc("/api/tts/settings", a.withCORS(a.handleTTSUpdate))
+	}
 
 	if a.twitchCfg != nil && a.twitchCfg.enabled() {
 		mux.HandleFunc("/api/oauth/twitch/start", a.withCORS(a.handleTwitchStart))
@@ -175,6 +191,13 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 		mux.HandleFunc("/api/oauth/kick/start", a.withCORS(a.handleKickStart))
 		mux.HandleFunc("/api/oauth/kick/callback", a.handleKickCallback)
 	}
+}
+
+func (a *apiHandlers) setTTSManager(manager TTSManager) {
+	if a == nil {
+		return
+	}
+	a.tts = manager
 }
 
 func (a *apiHandlers) withCORS(next http.HandlerFunc) http.HandlerFunc {
@@ -220,6 +243,23 @@ type categorySearchResponse struct {
 type categoryUpdateRequest struct {
 	Platform string `json:"platform"`
 	Name     string `json:"name"`
+}
+
+type ttsStatusResponse struct {
+	Enabled    bool               `json:"enabled"`
+	Voice      string             `json:"voice"`
+	VoiceLabel string             `json:"voice_label,omitempty"`
+	Voices     []ttsVoiceResponse `json:"voices"`
+}
+
+type ttsVoiceResponse struct {
+	Code  string `json:"code"`
+	Label string `json:"label"`
+}
+
+type ttsUpdateRequest struct {
+	Voice   string `json:"voice"`
+	Enabled *bool  `json:"enabled"`
 }
 
 func normalizeRole(role string) string {
@@ -307,6 +347,86 @@ func (a *apiHandlers) handleCategoryUpdate(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *apiHandlers) handleTTSStatus(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.tts == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	status := ttsStatusResponse{
+		Enabled: a.tts.Enabled(r.Context()),
+	}
+	current := a.tts.CurrentVoice(r.Context())
+	status.Voice = current.Code
+	status.VoiceLabel = current.Label
+
+	voices := a.tts.ListVoices()
+	status.Voices = make([]ttsVoiceResponse, 0, len(voices))
+	for _, v := range voices {
+		status.Voices = append(status.Voices, ttsVoiceResponse{Code: v.Code, Label: v.Label})
+	}
+
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (a *apiHandlers) handleTTSUpdate(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.tts == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	defer r.Body.Close()
+	var req ttsUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+
+	if strings.TrimSpace(req.Voice) != "" {
+		if _, err := a.tts.SetVoice(r.Context(), req.Voice); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	if req.Enabled != nil {
+		if err := a.tts.SetEnabled(r.Context(), *req.Enabled); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	status := ttsStatusResponse{
+		Enabled: a.tts.Enabled(r.Context()),
+	}
+	current := a.tts.CurrentVoice(r.Context())
+	status.Voice = current.Code
+	status.VoiceLabel = current.Label
+	voices := a.tts.ListVoices()
+	status.Voices = make([]ttsVoiceResponse, 0, len(voices))
+	for _, v := range voices {
+		status.Voices = append(status.Voices, ttsVoiceResponse{Code: v.Code, Label: v.Label})
+	}
+
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) {

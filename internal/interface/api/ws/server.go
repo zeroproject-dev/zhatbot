@@ -68,9 +68,20 @@ func (s *Server) Start(ctx context.Context) error {
 		s.api.register(mux)
 	}
 
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			setCORSHeaders(w)
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
+
 	srv := &http.Server{
 		Addr:    s.addr,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	s.mu.Lock()
@@ -212,6 +223,15 @@ func (s *Server) SetHandler(h MessageHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handler = h
+}
+
+// SetTTSManager allows wiring the TTS manager after server construction so the
+// HTTP API can expose the related endpoints.
+func (s *Server) SetTTSManager(m TTSManager) {
+	if s == nil || s.api == nil {
+		return
+	}
+	s.api.setTTSManager(m)
 }
 
 type incomingPayload struct {
