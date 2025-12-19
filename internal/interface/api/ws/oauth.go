@@ -450,11 +450,6 @@ func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) 
 	}
 
 	role := normalizeRole(req.Role)
-	if role != "streamer" {
-		log.Printf("kick oauth: role %q solicitado, usando streamer como único rol soportado", role)
-	}
-	role = "streamer"
-	log.Println("kick oauth: si necesitas el scope chat:write, revoca la app en Kick (Settings > Connections) y vuelve a iniciar sesión.")
 	verifier, err := generateCodeVerifier()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start oauth")
@@ -646,6 +641,11 @@ func (a *apiHandlers) handleKickStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role := normalizeRole(req.Role)
+	if role != "streamer" {
+		log.Printf("kick oauth: role %q solicitado, usando streamer como único rol soportado", role)
+	}
+	role = "streamer"
+	log.Println("kick oauth: si necesitas el scope chat:write, revoca la app en Kick (Settings > Connections) y vuelve a iniciar sesión.")
 	verifier, err := generateCodeVerifier()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start oauth")
