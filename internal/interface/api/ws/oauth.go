@@ -107,6 +107,7 @@ func (c *KickOAuthConfig) scopesForRole(role string) []kicksdk.OAuthScope {
 				string(kicksdk.ScopeUserRead),
 				string(kicksdk.ScopeChannelRead),
 				string(kicksdk.ScopeChannelWrite),
+				string(kicksdk.ScopeChatWrite),
 			}
 		}
 	default:
@@ -117,6 +118,7 @@ func (c *KickOAuthConfig) scopesForRole(role string) []kicksdk.OAuthScope {
 				string(kicksdk.ScopeUserRead),
 				string(kicksdk.ScopeChannelRead),
 				string(kicksdk.ScopeChannelWrite),
+				string(kicksdk.ScopeChatWrite),
 			}
 		}
 	}
@@ -442,6 +444,11 @@ func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) 
 	}
 
 	role := normalizeRole(req.Role)
+	if role != "streamer" {
+		log.Printf("kick oauth: role %q solicitado, usando streamer como único rol soportado", role)
+	}
+	role = "streamer"
+	log.Println("kick oauth: si necesitas el scope chat:write, revoca la app en Kick (Settings > Connections) y vuelve a iniciar sesión.")
 	verifier, err := generateCodeVerifier()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start oauth")
@@ -689,6 +696,9 @@ func (a *apiHandlers) handleKickCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	payload := resp.Payload
+	if payload.Scope != "" {
+		log.Printf("kick oauth: scope otorgado: %s", payload.Scope)
+	}
 	cred := &domain.Credential{
 		Platform:     domain.PlatformKick,
 		Role:         entry.Role,

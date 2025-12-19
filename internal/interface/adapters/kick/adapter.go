@@ -148,15 +148,29 @@ func (a *Adapter) SendMessage(ctx context.Context, platform domain.Platform, cha
 
 	log.Printf("Kick -> Chat.PostMessage(broadcasterUserID=%d): %s", a.cfg.BroadcasterUserID, text)
 
-	_, err := client.Chat().PostMessage(ctx, kicksdk.PostChatMessageInput{
+	resp, err := client.Chat().PostMessage(ctx, kicksdk.PostChatMessageInput{
 		BroadcasterUserID: a.cfg.BroadcasterUserID,
 		Content:           text,
-		PosterType:        kicksdk.MessagePosterBot,
+		PosterType:        kicksdk.MessagePosterUser,
 	})
 	if err != nil {
 		return fmt.Errorf("kick: error enviando mensaje de chat: %w", err)
 	}
 
+	if !resp.Payload.IsSent {
+		meta := resp.ResponseMetadata
+		log.Printf(
+			"kick: PostMessage rechazado (status=%d, message_id=%s, kick_message=%q, kick_error=%q, description=%q)",
+			meta.StatusCode,
+			resp.Payload.MessageID,
+			meta.KickMessage,
+			meta.KickError,
+			meta.KickErrorDescription,
+		)
+		return fmt.Errorf("kick: mensaje no fue aceptado por la API (status %d)", meta.StatusCode)
+	}
+
+	log.Printf("kick: mensaje entregado (message_id=%s)", resp.Payload.MessageID)
 	return nil
 }
 

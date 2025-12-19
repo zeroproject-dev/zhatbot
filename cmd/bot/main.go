@@ -87,18 +87,16 @@ func main() {
 		log.Printf("error obteniendo token de Twitch streamer desde DB: %v", err)
 	}
 
-	kickChatToken := os.Getenv("KICK_BOT_TOKEN")
-	if cred, err := credStore.Get(ctx, domain.PlatformKick, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
-		kickChatToken = cred.AccessToken
-	} else if err != nil {
-		log.Printf("error obteniendo token de Kick bot desde DB: %v", err)
-	}
-
-	kickStreamToken := kickChatToken
+	kickAccessToken := ""
 	if cred, err := credStore.Get(ctx, domain.PlatformKick, "streamer"); err == nil && cred != nil && cred.AccessToken != "" {
-		kickStreamToken = cred.AccessToken
+		kickAccessToken = cred.AccessToken
 	} else if err != nil {
 		log.Printf("error obteniendo token de Kick streamer desde DB: %v", err)
+	}
+	if kickAccessToken == "" {
+		log.Println("kick: no hay token de streamer almacenado. Inicia sesión desde el panel web (rol streamer).")
+		log.Println("kick: si necesitas el nuevo scope chat:write, revoca la app en Kick (Settings > Connections) y vuelve a autorizar.")
+		log.Fatal("kick: token de streamer ausente")
 	}
 
 	cfg := twitchadapter.Config{
@@ -161,15 +159,13 @@ func main() {
 	)
 
 	// kickinfra.NewStreamService espera (KickStreamServiceConfig) y devuelve (svc, error).
-	if kickStreamToken == "" {
-		log.Fatal("No hay token de Kick disponible para actualizar el título")
-	}
+	// if kickStreamToken == "" {
+	// 	log.Fatal("No hay token de Kick disponible para actualizar el título")
+	// }
 
 	kickSvc, err := kickinfra.NewStreamService(
 		kickinfra.KickStreamServiceConfig{
-			AccessToken: kickStreamToken,
-			// si tu struct tiene más campos (RefreshToken, OwnerID...), añádelos aquí.
-			// RefreshToken: os.Getenv("KICK_BOT_REFRESH_TOKEN"),
+			AccessToken: kickAccessToken,
 		},
 	)
 	if err != nil {
@@ -196,15 +192,15 @@ func main() {
 				twitchStreamSvc.UpdateAccessToken(cred.AccessToken)
 			}
 		case domain.PlatformKick:
-			switch strings.ToLower(strings.TrimSpace(cred.Role)) {
-			case "streamer":
-				if kickStreamSvc != nil {
-					kickStreamSvc.UpdateAccessToken(cred.AccessToken)
-				}
-			case "bot":
-				if kickAd != nil {
-					kickAd.UpdateAccessToken(cred.AccessToken)
-				}
+			if !strings.EqualFold(strings.TrimSpace(cred.Role), "streamer") {
+				log.Printf("token refresher: rol Kick inesperado %q ignorado", cred.Role)
+				return
+			}
+			if kickStreamSvc != nil {
+				kickStreamSvc.UpdateAccessToken(cred.AccessToken)
+			}
+			if kickAd != nil {
+				kickAd.UpdateAccessToken(cred.AccessToken)
 			}
 		}
 	})
@@ -259,12 +255,8 @@ func main() {
 		log.Fatalf("KICK_CHATROOM_ID inválido")
 	}
 
-	if kickChatToken == "" {
-		log.Fatal("No hay token de Kick disponible para el chat")
-	}
-
 	kickCfg := kickadapter.Config{
-		AccessToken:       kickChatToken,
+		AccessToken:       kickAccessToken,
 		BroadcasterUserID: kickBroadcasterID,
 		ChatroomID:        chatroomID,
 	}
