@@ -46,6 +46,7 @@
 	let statusLoading = $state(false);
 	let statusError = $state<string | null>(null);
 	let lastSynced = $state<string | null>(null);
+	let logoutKey = $state<string | null>(null);
 
 	const login = async (platform: Platform, role: Role) => {
 		if (!browser) return;
@@ -128,6 +129,30 @@
 		return m.auth_status_last_sync({ date: formatDate(lastSynced) });
 	};
 
+	const logout = async (platform: Platform, role: Role) => {
+		if (!browser) return;
+		const key = `${platform}-${role}`;
+		logoutKey = key;
+		feedback = null;
+		try {
+			const response = await fetch(`${baseUrl}/api/oauth/logout`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ platform, role })
+			});
+			if (!response.ok) {
+				throw new Error(`logout failed ${response.status}`);
+			}
+			feedback = { type: 'success', message: m.auth_logout_success() };
+		} catch (error) {
+			console.error('logout error', error);
+			feedback = { type: 'error', message: m.auth_logout_error() };
+		} finally {
+			logoutKey = null;
+			await loadStatus();
+		}
+	};
+
 	onMount(() => {
 		loadStatus();
 		const handleFocus = () => loadStatus();
@@ -190,6 +215,16 @@
 					{/if}
 				</div>
 			</button>
+			{#if connected}
+				<button
+					type="button"
+					class="text-xs uppercase tracking-wide text-rose-200 underline-offset-2 hover:underline"
+					onclick={() => logout(btn.platform, btn.role)}
+					disabled={logoutKey === `${btn.platform}-${btn.role}`}
+				>
+					{logoutKey === `${btn.platform}-${btn.role}` ? '…' : m.auth_logout_button()}
+				</button>
+			{/if}
 		{/each}
 	</div>
 

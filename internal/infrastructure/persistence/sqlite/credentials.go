@@ -210,6 +210,17 @@ FROM credentials;
 	return out, nil
 }
 
+func (s *CredentialStore) Delete(ctx context.Context, platform domain.Platform, role string) error {
+	if s.db == nil {
+		return fmt.Errorf("sqlite: db no inicializada")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM credentials WHERE platform = ? AND role = ?`, string(platform), role)
+	if err != nil {
+		return fmt.Errorf("sqlite: delete credential: %w", err)
+	}
+	return nil
+}
+
 func nullTime(t time.Time) interface{} {
 	if t.IsZero() {
 		return nil

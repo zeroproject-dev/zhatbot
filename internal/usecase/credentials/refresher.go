@@ -129,6 +129,8 @@ func (r *Refresher) RefreshAll(ctx context.Context) error {
 			continue
 		}
 
+		log.Println("Refreshing: " + cred.Platform)
+
 		switch cred.Platform {
 		case domain.PlatformTwitch:
 			if err := r.refreshTwitch(ctx, cred); err != nil {

@@ -175,6 +175,7 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 	}
 
 	mux.HandleFunc("/api/oauth/status", a.withCORS(a.handleStatus))
+	mux.HandleFunc("/api/oauth/logout", a.withCORS(a.handleLogout))
 	if a.category != nil {
 		mux.HandleFunc("/api/categories/search", a.withCORS(a.handleCategorySearch))
 		mux.HandleFunc("/api/categories/update", a.withCORS(a.handleCategoryUpdate))
@@ -262,6 +263,11 @@ type ttsVoiceResponse struct {
 type ttsUpdateRequest struct {
 	Voice   string `json:"voice"`
 	Enabled *bool  `json:"enabled"`
+}
+
+type oauthLogoutRequest struct {
+	Platform string `json:"platform"`
+	Role     string `json:"role"`
 }
 
 func normalizeRole(role string) string {
@@ -764,6 +770,47 @@ func (a *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *apiHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if a == nil || a.credRepo == nil {
+		writeError(w, http.StatusInternalServerError, "credential store not configured")
+		return
+	}
+
+	var req oauthLogoutRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	platform := parsePlatformParam(req.Platform)
+	if platform == "" {
+		writeError(w, http.StatusBadRequest, "invalid platform")
+		return
+	}
+
+	role := normalizeRole(req.Role)
+	if platform == domain.PlatformKick {
+		role = "streamer"
+	}
+
+	if err := a.credRepo.Delete(r.Context(), platform, role); err != nil {
+		log.Printf("oauth logout: delete failed (%s/%s): %v", platform, role, err)
+		writeError(w, http.StatusInternalServerError, "could not delete credentials")
+		return
+	}
+
+	log.Printf("oauth logout: credenciales eliminadas (%s/%s)", platform, role)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func parsePlatformParam(p string) domain.Platform {

@@ -38,4 +38,5 @@ type CredentialRepository interface {
 	Get(ctx context.Context, platform Platform, role string) (*Credential, error)
 	Save(ctx context.Context, cred *Credential) error
 	List(ctx context.Context) ([]*Credential, error)
+	Delete(ctx context.Context, platform Platform, role string) error
 }
