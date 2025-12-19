@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"zhatBot/internal/domain"
 )
 
 // Service centraliza la lógica para buscar/actualizar categorías por plataforma.
 type Service struct {
+	mu                  sync.RWMutex
 	twitch              domain.TwitchChannelService
 	twitchBroadcasterID string
 	kick                domain.KickStreamService
@@ -29,6 +31,25 @@ func NewService(cfg Config) *Service {
 	}
 }
 
+func (s *Service) SetKickService(svc domain.KickStreamService) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.kick = svc
+}
+
+func (s *Service) SetTwitchService(svc domain.TwitchChannelService, broadcasterID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.twitch = svc
+	s.twitchBroadcasterID = strings.TrimSpace(broadcasterID)
+}
+
 func (s *Service) Search(ctx context.Context, platform domain.Platform, query string) ([]domain.CategoryOption, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -37,15 +58,21 @@ func (s *Service) Search(ctx context.Context, platform domain.Platform, query st
 
 	switch platform {
 	case domain.PlatformTwitch:
+		s.mu.RLock()
+		twitchSvc := s.twitch
+		s.mu.RUnlock()
 		if s.twitch == nil {
 			return nil, fmt.Errorf("servicio de Twitch no disponible")
 		}
-		return s.twitch.SearchCategories(ctx, query)
+		return twitchSvc.SearchCategories(ctx, query)
 	case domain.PlatformKick:
-		if s.kick == nil {
+		s.mu.RLock()
+		kickSvc := s.kick
+		s.mu.RUnlock()
+		if kickSvc == nil {
 			return nil, fmt.Errorf("servicio de Kick no disponible")
 		}
-		return s.kick.SearchCategories(ctx, query)
+		return kickSvc.SearchCategories(ctx, query)
 	default:
 		return nil, fmt.Errorf("plataforma no soportada")
 	}
@@ -59,18 +86,25 @@ func (s *Service) Update(ctx context.Context, platform domain.Platform, category
 
 	switch platform {
 	case domain.PlatformTwitch:
-		if s.twitch == nil {
+		s.mu.RLock()
+		twitchSvc := s.twitch
+		broadcasterID := s.twitchBroadcasterID
+		s.mu.RUnlock()
+		if twitchSvc == nil {
 			return fmt.Errorf("servicio de Twitch no disponible")
 		}
-		if s.twitchBroadcasterID == "" {
+		if broadcasterID == "" {
 			return fmt.Errorf("broadcasterID de Twitch vacío")
 		}
-		return s.twitch.UpdateCategory(ctx, s.twitchBroadcasterID, categoryName)
+		return twitchSvc.UpdateCategory(ctx, broadcasterID, categoryName)
 	case domain.PlatformKick:
-		if s.kick == nil {
+		s.mu.RLock()
+		kickSvc := s.kick
+		s.mu.RUnlock()
+		if kickSvc == nil {
 			return fmt.Errorf("servicio de Kick no disponible")
 		}
-		return s.kick.SetCategory(ctx, categoryName)
+		return kickSvc.SetCategory(ctx, categoryName)
 	default:
 		return fmt.Errorf("plataforma no soportada")
 	}

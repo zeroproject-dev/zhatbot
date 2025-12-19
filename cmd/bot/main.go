@@ -16,12 +16,11 @@ import (
 
 	"github.com/nicklaw5/helix/v2"
 
+	"zhatBot/internal/app"
 	"zhatBot/internal/domain"
 	"zhatBot/internal/infrastructure/config"
 	sqlitestorage "zhatBot/internal/infrastructure/persistence/sqlite"
-	kickinfra "zhatBot/internal/infrastructure/platform/kick"
 	twitchinfra "zhatBot/internal/infrastructure/platform/twitch"
-	kickadapter "zhatBot/internal/interface/adapters/kick"
 	twitchadapter "zhatBot/internal/interface/adapters/twitch"
 	ws "zhatBot/internal/interface/api/ws"
 	"zhatBot/internal/interface/outs"
@@ -37,9 +36,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	c, _ := config.Load()
+	cfg, _ := config.Load()
 
-	dbPath := c.DatabasePath
+	dbPath := cfg.DatabasePath
 	if dbPath == "" {
 		dbPath = "data/zhatbot.db"
 	}
@@ -50,18 +49,35 @@ func main() {
 	}
 	defer credStore.Close()
 
+	categorySvc := categoryusecase.NewService(categoryusecase.Config{})
+	resolver := stream.NewResolver(nil, nil)
+	multiOut := outs.NewMultiSender()
+
+	platformMgr := app.NewPlatformManager(app.ManagerConfig{
+		Context:  ctx,
+		Category: categorySvc,
+		Resolver: resolver,
+		MultiOut: multiOut,
+		Kick: app.KickConfig{
+			BroadcasterUserID: envInt("KICK_BROADCASTER_USER_ID"),
+			ChatroomID:        envInt("KICK_CHATROOM_ID"),
+		},
+	})
+	defer platformMgr.Shutdown()
+
 	refresher := credentialsusecase.NewRefresher(
 		credStore,
 		credentialsusecase.TwitchConfig{
-			ClientID:     c.TwitchClientId,
-			ClientSecret: c.TwitchClientSecret,
+			ClientID:     cfg.TwitchClientId,
+			ClientSecret: cfg.TwitchClientSecret,
 		},
 		credentialsusecase.KickConfig{
-			ClientID:     c.KickClientID,
-			ClientSecret: c.KickClientSecret,
-			RedirectURI:  c.KickRedirectURI,
+			ClientID:     cfg.KickClientID,
+			ClientSecret: cfg.KickClientSecret,
+			RedirectURI:  cfg.KickRedirectURI,
 		},
 	)
+	refresher.RegisterHook(platformMgr.HandleCredentialUpdate)
 
 	if err := refresher.RefreshAll(ctx); err != nil {
 		log.Printf("error refrescando tokens: %v", err)
@@ -71,37 +87,26 @@ func main() {
 	refresher.Start(ctx, refreshInterval)
 
 	if cred, err := credStore.Get(ctx, domain.PlatformTwitch, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
-		c.TwitchToken = cred.AccessToken
+		cfg.TwitchToken = cred.AccessToken
 	} else if err != nil {
 		log.Printf("error obteniendo token de Twitch bot desde DB: %v", err)
 	}
 
 	if cred, err := credStore.Get(ctx, domain.PlatformTwitch, "streamer"); err == nil && cred != nil {
 		if cred.AccessToken != "" {
-			c.TwitchApiToken = cred.AccessToken
+			cfg.TwitchApiToken = cred.AccessToken
 		}
 		if cred.RefreshToken != "" {
-			c.TwitchApiRefreshToken = cred.RefreshToken
+			cfg.TwitchApiRefreshToken = cred.RefreshToken
 		}
 	} else if err != nil {
 		log.Printf("error obteniendo token de Twitch streamer desde DB: %v", err)
 	}
 
-	kickAccessToken := ""
-	if cred, err := credStore.Get(ctx, domain.PlatformKick, "streamer"); err == nil && cred != nil && cred.AccessToken != "" {
-		kickAccessToken = cred.AccessToken
-	} else if err != nil {
-		log.Printf("error obteniendo token de Kick streamer desde DB: %v", err)
-	}
-	if kickAccessToken == "" {
-		log.Println("kick: no hay token de streamer almacenado. Inicia sesión desde el panel web (rol streamer).")
-		log.Println("kick: si necesitas el nuevo scope chat:write, revoca la app en Kick (Settings > Connections) y vuelve a autorizar.")
-	}
-
-	cfg := twitchadapter.Config{
-		Username:   c.TwitchUsername,
-		OAuthToken: formatTwitchOAuthToken(c.TwitchToken),
-		Channels:   c.TwitchChannels,
+	twitchCfg := twitchadapter.Config{
+		Username:   cfg.TwitchUsername,
+		OAuthToken: formatTwitchOAuthToken(cfg.TwitchToken),
+		Channels:   cfg.TwitchChannels,
 	}
 
 	wsAddr := os.Getenv("CHAT_WS_ADDR")
@@ -110,133 +115,52 @@ func main() {
 	}
 
 	wsConfig := ws.Config{
-		Addr:           wsAddr,
-		CredentialRepo: credStore,
+		Addr:            wsAddr,
+		CredentialRepo:  credStore,
+		CredentialHook:  platformMgr.HandleCredentialUpdate,
+		CategoryManager: categorySvc,
 	}
 
-	if c.TwitchClientId != "" && c.TwitchClientSecret != "" && c.TwitchRedirectURI != "" {
+	if cfg.TwitchClientId != "" && cfg.TwitchClientSecret != "" && cfg.TwitchRedirectURI != "" {
 		wsConfig.Twitch = &ws.TwitchOAuthConfig{
-			ClientID:       c.TwitchClientId,
-			ClientSecret:   c.TwitchClientSecret,
-			RedirectURI:    c.TwitchRedirectURI,
+			ClientID:       cfg.TwitchClientId,
+			ClientSecret:   cfg.TwitchClientSecret,
+			RedirectURI:    cfg.TwitchRedirectURI,
 			BotScopes:      []string{"chat:read", "chat:edit"},
 			StreamerScopes: []string{"channel:manage:broadcast"},
 		}
 	}
 
-	if c.KickClientID != "" && c.KickClientSecret != "" && c.KickRedirectURI != "" {
+	if cfg.KickClientID != "" && cfg.KickClientSecret != "" && cfg.KickRedirectURI != "" {
 		wsConfig.Kick = &ws.KickOAuthConfig{
-			ClientID:       c.KickClientID,
-			ClientSecret:   c.KickClientSecret,
-			RedirectURI:    c.KickRedirectURI,
-			BotScopes:      []string{"user:read", "channel:read", "channel:write"},
-			StreamerScopes: []string{"user:read", "channel:read", "channel:write"},
+			ClientID:       cfg.KickClientID,
+			ClientSecret:   cfg.KickClientSecret,
+			RedirectURI:    cfg.KickRedirectURI,
+			StreamerScopes: []string{"user:read", "channel:read", "channel:write", "chat:write"},
 		}
 	}
-
-	// ---------- 1) Crear servicios de stream por plataforma ----------
-
-	var twitchChannelSvc domain.TwitchChannelService
-	var twitchStreamSvc *twitchinfra.TwitchStreamService
-	var broadcasterID string
-	var twitchTitleSvc domain.StreamTitleService
-	if c.TwitchClientId != "" && strings.TrimSpace(c.TwitchApiToken) != "" {
-		service, err := twitchinfra.NewStreamService(
-			c.TwitchClientId,
-			c.TwitchApiToken,
-		)
-		if err != nil {
-			log.Printf("twitch: no pude crear el servicio de stream: %v", err)
-		} else {
-			twitchChannelSvc = service
-			twitchStreamSvc, _ = service.(*twitchinfra.TwitchStreamService)
-
-			if id, err := resolveTwitchBroadcasterID(ctx, c.TwitchClientId, c.TwitchApiToken, c.TwitchUsername); err != nil {
-				log.Printf("twitch: no pude resolver el ID del broadcaster (%v). Se omitirá el control de título/categoría hasta que haya token válido.", err)
-				twitchChannelSvc = nil
-				twitchStreamSvc = nil
-			} else {
-				broadcasterID = id
-				twitchTitleSvc = twitchinfra.NewTwitchTitleAdapter(
-					twitchChannelSvc,
-					broadcasterID,
-				)
-			}
-		}
-	} else {
-		log.Println("twitch: no hay TWITCH_API_ACCESS_TOKEN válido; omitiendo control de título/categoría.")
-	}
-
-	// kickinfra.NewStreamService espera (KickStreamServiceConfig) y devuelve (svc, error).
-	// if kickStreamToken == "" {
-	// 	log.Fatal("No hay token de Kick disponible para actualizar el título")
-	// }
-
-	var kickStreamService domain.KickStreamService
-	var kickStreamSvc *kickinfra.KickStreamService
-	if kickAccessToken != "" {
-		kickService, err := kickinfra.NewStreamService(
-			kickinfra.KickStreamServiceConfig{
-				AccessToken: kickAccessToken,
-			},
-		)
-		if err != nil {
-			log.Fatalf("error creando KickStreamService: %v", err)
-		}
-		kickStreamService = kickService
-		kickStreamSvc, _ = kickService.(*kickinfra.KickStreamService)
-	} else {
-		log.Println("kick: KickStreamService no inicializado (sin token).")
-	}
-
-	categorySvc := categoryusecase.NewService(categoryusecase.Config{
-		Twitch:              twitchChannelSvc,
-		TwitchBroadcasterID: broadcasterID,
-		Kick:                kickStreamService,
-	})
-	wsConfig.CategoryManager = categorySvc
-
-	var kickAd *kickadapter.Adapter
-
-	refresher.RegisterHook(func(ctx context.Context, cred *domain.Credential) {
-		if cred == nil {
-			return
-		}
-		switch cred.Platform {
-		case domain.PlatformTwitch:
-			if strings.EqualFold(cred.Role, "streamer") && twitchStreamSvc != nil {
-				twitchStreamSvc.UpdateAccessToken(cred.AccessToken)
-			}
-		case domain.PlatformKick:
-			if !strings.EqualFold(strings.TrimSpace(cred.Role), "streamer") {
-				log.Printf("token refresher: rol Kick inesperado %q ignorado", cred.Role)
-				return
-			}
-			if kickStreamSvc != nil {
-				kickStreamSvc.UpdateAccessToken(cred.AccessToken)
-			} else {
-				log.Println("token refresher: KickStreamService no inicializado; reinicia el bot después de iniciar sesión.")
-			}
-			if kickAd != nil {
-				kickAd.UpdateAccessToken(cred.AccessToken)
-			} else {
-				log.Println("token refresher: Kick adapter no iniciado; reinicia el bot tras iniciar sesión para habilitar Kick.")
-			}
-		}
-	})
 
 	wsServer := ws.NewServer(wsConfig)
 
-	// ---------- 2) Resolver de servicios por plataforma ----------
-
-	var kickTitleSvc domain.StreamTitleService
-	if kickStreamService != nil {
-		kickTitleSvc = kickStreamService
+	var twitchTitleSvc domain.StreamTitleService
+	if cfg.TwitchClientId != "" && cfg.TwitchApiToken != "" {
+		twitchAPIService, err := twitchinfra.NewStreamService(cfg.TwitchClientId, cfg.TwitchApiToken)
+		if err != nil {
+			log.Printf("no se pudo iniciar el servicio de Twitch: %v", err)
+		} else {
+			broadcasterID, err := resolveTwitchBroadcasterID(ctx, cfg.TwitchClientId, cfg.TwitchApiToken, cfg.TwitchUsername)
+			if err != nil {
+				log.Printf("no pude resolver el ID de Twitch: %v", err)
+			} else {
+				categorySvc.SetTwitchService(twitchAPIService, broadcasterID)
+				twitchTitleSvc = twitchinfra.NewTwitchTitleAdapter(twitchAPIService, broadcasterID)
+			}
+		}
 	}
 
-	resolver := stream.NewResolver(twitchTitleSvc, kickTitleSvc)
-
-	// ---------- 3) Router de comandos ----------
+	if twitchTitleSvc != nil {
+		resolver.Set(domain.PlatformTwitch, twitchTitleSvc)
+	}
 
 	customManager, err := commands.NewCustomCommandManager(ctx, credStore)
 	if err != nil {
@@ -245,59 +169,21 @@ func main() {
 
 	router := commands.NewRouter("!")
 	router.SetCustomManager(customManager)
-
-	// Comandos genéricos
 	router.Register(commands.NewPingCommand())
 	router.Register(commands.NewManageCustomCommand(customManager))
+
 	ttsService := ttsusecase.NewService(credStore, wsServer, filepath.Join("data", "tts"))
 	wsServer.SetTTSManager(ttsService)
 	router.Register(commands.NewTTSCommand(ttsService))
 
-	// Comando title (único, multi-plataforma)
-	router.Register(
-		commands.NewTitleCommand(
-			resolver,
-		),
-	)
+	router.Register(commands.NewTitleCommand(resolver))
 
-	// ---------- 4) Validar config de Twitch ----------
-
-	if cfg.Username == "" || cfg.OAuthToken == "" {
-		log.Fatal("TWITCH_BOT_USERNAME o TWITCH_BOT_OAUTH_TOKEN no configurados")
-	}
-
-	// ---------- 5) Adapter de Twitch ----------
-
-	twitchAd := twitchadapter.NewAdapter(cfg)
-
-	var kickChannelID string
-	if kickAccessToken != "" {
-		kickBroadcasterID, err := strconv.Atoi(os.Getenv("KICK_BROADCASTER_USER_ID"))
-		if err != nil {
-			log.Fatalf("KICK_BROADCASTER_USER_ID inválido")
-		}
-
-		chatroomID, err := strconv.Atoi(os.Getenv("KICK_CHATROOM_ID"))
-		if err != nil {
-			log.Fatalf("KICK_CHATROOM_ID inválido")
-		}
-
-		kickCfg := kickadapter.Config{
-			AccessToken:       kickAccessToken,
-			BroadcasterUserID: kickBroadcasterID,
-			ChatroomID:        chatroomID,
-		}
-
-		kickAd = kickadapter.NewAdapter(kickCfg)
-		kickChannelID = strconv.Itoa(chatroomID)
+	var twitchAd *twitchadapter.Adapter
+	if twitchCfg.Username == "" || twitchCfg.OAuthToken == "" {
+		log.Println("twitch: adaptador deshabilitado hasta que completes el login del bot.")
 	} else {
-		log.Println("kick: adaptador de chat deshabilitado hasta que existan credenciales de streamer.")
-	}
-
-	multiOut := outs.NewMultiSender()
-	multiOut.Register(domain.PlatformTwitch, twitchAd)
-	if kickAd != nil {
-		multiOut.Register(domain.PlatformKick, kickAd)
+		twitchAd = twitchadapter.NewAdapter(twitchCfg)
+		multiOut.Register(domain.PlatformTwitch, twitchAd)
 	}
 
 	uc := handle_message.NewInteractor(multiOut, router)
@@ -308,13 +194,11 @@ func main() {
 		if msgNormalized.ChannelID == "" {
 			switch msgNormalized.Platform {
 			case domain.PlatformTwitch:
-				if len(cfg.Channels) > 0 {
-					msgNormalized.ChannelID = cfg.Channels[0]
+				if len(twitchCfg.Channels) > 0 {
+					msgNormalized.ChannelID = twitchCfg.Channels[0]
 				}
 			case domain.PlatformKick:
-				if kickChannelID != "" {
-					msgNormalized.ChannelID = kickChannelID
-				}
+				msgNormalized.ChannelID = platformMgr.ChannelID(domain.PlatformKick)
 			}
 		}
 
@@ -330,9 +214,9 @@ func main() {
 	}
 
 	wsServer.SetHandler(dispatch)
-	twitchAd.SetHandler(dispatch)
-	if kickAd != nil {
-		kickAd.SetHandler(dispatch)
+	platformMgr.SetHandler(dispatch)
+	if twitchAd != nil {
+		twitchAd.SetHandler(dispatch)
 	}
 
 	go func() {
@@ -344,23 +228,49 @@ func main() {
 
 	log.Println("Iniciando bot...")
 
-	go func() {
-		if err := twitchAd.Start(ctx); err != nil && err != context.Canceled {
-			log.Printf("twitch adapter error: %v", err)
-		}
-	}()
-
-	if kickAd != nil {
+	if twitchAd != nil {
 		go func() {
-			if err := kickAd.Start(ctx); err != nil && err != context.Canceled {
-				log.Printf("kick adapter error: %v", err)
+			if err := twitchAd.Start(ctx); err != nil && err != context.Canceled {
+				log.Printf("twitch adapter error: %v", err)
 			}
 		}()
 	}
 
+	handleCredentialSnapshot(ctx, platformMgr, credStore)
+
 	<-ctx.Done()
 
 	log.Println("Bot apagado.")
+}
+
+func envInt(key string) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Printf("%s inválido (%q)", key, v)
+		return 0
+	}
+	return n
+}
+
+func handleCredentialSnapshot(ctx context.Context, mgr *app.PlatformManager, repo domain.CredentialRepository) {
+	if mgr == nil || repo == nil {
+		return
+	}
+	creds, err := repo.List(ctx)
+	if err != nil {
+		log.Printf("snapshot credentials error: %v", err)
+		return
+	}
+	for _, cred := range creds {
+		if cred == nil {
+			continue
+		}
+		mgr.HandleCredentialUpdate(ctx, cred)
+	}
 }
 
 func formatTwitchOAuthToken(token string) string {

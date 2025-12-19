@@ -30,6 +30,7 @@ const (
 type Config struct {
 	Addr            string
 	CredentialRepo  domain.CredentialRepository
+	CredentialHook  CredentialHook
 	Twitch          *TwitchOAuthConfig
 	Kick            *KickOAuthConfig
 	CategoryManager CategoryManager
@@ -141,6 +142,7 @@ type apiHandlers struct {
 	kickOAuth *kicksdk.Client
 	category  CategoryManager
 	tts       TTSManager
+	hook      CredentialHook
 }
 
 func newAPIHandlers(cfg Config) *apiHandlers {
@@ -166,6 +168,7 @@ func newAPIHandlers(cfg Config) *apiHandlers {
 		kickOAuth: kickClient,
 		category:  cfg.CategoryManager,
 		tts:       cfg.TTSManager,
+		hook:      cfg.CredentialHook,
 	}
 }
 
@@ -531,6 +534,7 @@ func (a *apiHandlers) handleTwitchCallback(w http.ResponseWriter, r *http.Reques
 		writeHTML(w, http.StatusInternalServerError, "Could not store credentials.")
 		return
 	}
+	a.notifyCredentialHook(r.Context(), cred)
 
 	writeHTML(w, http.StatusOK, fmt.Sprintf("✅ Tokens guardados para Twitch (%s). Ya puedes cerrar esta ventana.", entry.Role))
 }
@@ -718,6 +722,7 @@ func (a *apiHandlers) handleKickCallback(w http.ResponseWriter, r *http.Request)
 		writeHTML(w, http.StatusInternalServerError, "Could not store credentials.")
 		return
 	}
+	a.notifyCredentialHook(r.Context(), cred)
 
 	writeHTML(w, http.StatusOK, fmt.Sprintf("✅ Tokens guardados para Kick (%s). Ya puedes cerrar esta ventana.", entry.Role))
 }
@@ -810,7 +815,18 @@ func (a *apiHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("oauth logout: credenciales eliminadas (%s/%s)", platform, role)
+	a.notifyCredentialHook(r.Context(), &domain.Credential{
+		Platform: platform,
+		Role:     role,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *apiHandlers) notifyCredentialHook(ctx context.Context, cred *domain.Credential) {
+	if a == nil || a.hook == nil || cred == nil {
+		return
+	}
+	a.hook(ctx, cred)
 }
 
 func parsePlatformParam(p string) domain.Platform {
@@ -908,3 +924,4 @@ func randomStateID() string {
 	}
 	return hex.EncodeToString(buf)
 }
+type CredentialHook func(ctx context.Context, cred *domain.Credential)

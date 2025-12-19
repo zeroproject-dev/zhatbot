@@ -3,6 +3,7 @@ package outs
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"zhatBot/internal/domain"
 )
@@ -16,6 +17,7 @@ type Sender interface {
 
 // MultiSender enruta los mensajes al sender correcto según la plataforma.
 type MultiSender struct {
+	mu      sync.RWMutex
 	senders map[domain.Platform]Sender
 }
 
@@ -28,12 +30,32 @@ func NewMultiSender() *MultiSender {
 
 // Register asocia una plataforma con un Sender concreto (ej. TwitchAdapter, KickAdapter).
 func (m *MultiSender) Register(platform domain.Platform, sender Sender) {
+	if m == nil || sender == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.senders[platform] = sender
+}
+
+// Unregister elimina el sender de una plataforma.
+func (m *MultiSender) Unregister(platform domain.Platform) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.senders, platform)
 }
 
 // SendMessage busca el sender para esa plataforma y delega el envío.
 func (m *MultiSender) SendMessage(ctx context.Context, platform domain.Platform, channelID, text string) error {
+	if m == nil {
+		return fmt.Errorf("no hay multi sender configurado")
+	}
+	m.mu.RLock()
 	sender, ok := m.senders[platform]
+	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("no hay sender registrado para la plataforma %s", platform)
 	}
