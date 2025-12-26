@@ -28,6 +28,7 @@ import (
 	"zhatBot/internal/usecase/commands"
 	credentialsusecase "zhatBot/internal/usecase/credentials"
 	"zhatBot/internal/usecase/handle_message"
+	"zhatBot/internal/usecase/notifications"
 	"zhatBot/internal/usecase/stream"
 	ttsusecase "zhatBot/internal/usecase/tts"
 )
@@ -52,6 +53,7 @@ func main() {
 	categorySvc := categoryusecase.NewService(categoryusecase.Config{})
 	resolver := stream.NewResolver(nil, nil)
 	multiOut := outs.NewMultiSender()
+	eventLogger := notifications.NewEventLogger()
 
 	platformMgr := app.NewPlatformManager(app.ManagerConfig{
 		Context:  ctx,
@@ -61,6 +63,7 @@ func main() {
 		Kick: app.KickConfig{
 			BroadcasterUserID: envInt("KICK_BROADCASTER_USER_ID"),
 			ChatroomID:        envInt("KICK_CHATROOM_ID"),
+			EventHandler:      eventLogger.HandleKickMessage,
 		},
 	})
 	defer platformMgr.Shutdown()
@@ -104,9 +107,10 @@ func main() {
 	}
 
 	twitchCfg := twitchadapter.Config{
-		Username:   cfg.TwitchUsername,
-		OAuthToken: formatTwitchOAuthToken(cfg.TwitchToken),
-		Channels:   cfg.TwitchChannels,
+		Username:          cfg.TwitchUsername,
+		OAuthToken:        formatTwitchOAuthToken(cfg.TwitchToken),
+		Channels:          cfg.TwitchChannels,
+		UserNoticeHandler: eventLogger.HandleTwitchUserNotice,
 	}
 
 	wsAddr := os.Getenv("CHAT_WS_ADDR")
@@ -115,10 +119,11 @@ func main() {
 	}
 
 	wsConfig := ws.Config{
-		Addr:            wsAddr,
-		CredentialRepo:  credStore,
-		CredentialHook:  platformMgr.HandleCredentialUpdate,
-		CategoryManager: categorySvc,
+		Addr:             wsAddr,
+		CredentialRepo:   credStore,
+		NotificationRepo: credStore,
+		CredentialHook:   platformMgr.HandleCredentialUpdate,
+		CategoryManager:  categorySvc,
 	}
 
 	if cfg.TwitchClientId != "" && cfg.TwitchClientSecret != "" && cfg.TwitchRedirectURI != "" {

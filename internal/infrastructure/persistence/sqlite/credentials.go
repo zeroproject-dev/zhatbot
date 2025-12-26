@@ -90,6 +90,23 @@ CREATE TABLE IF NOT EXISTS settings (
 		return fmt.Errorf("sqlite: migrate settings: %w", err)
 	}
 
+	const notificationsTable = `
+CREATE TABLE IF NOT EXISTS notifications (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	type TEXT NOT NULL,
+	platform TEXT,
+	username TEXT,
+	amount REAL,
+	message TEXT,
+	metadata TEXT,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);`
+
+	if _, err := db.Exec(notificationsTable); err != nil {
+		return fmt.Errorf("sqlite: migrate notifications: %w", err)
+	}
+
 	return nil
 }
 
@@ -355,6 +372,104 @@ FROM custom_commands;
 	return cmds, nil
 }
 
+// ----- Notifications -----
+
+func (s *CredentialStore) SaveNotification(ctx context.Context, notification *domain.Notification) (*domain.Notification, error) {
+	if notification == nil {
+		return nil, fmt.Errorf("sqlite: notification nil")
+	}
+
+	now := time.Now().UTC()
+	if notification.CreatedAt.IsZero() {
+		notification.CreatedAt = now
+	}
+
+	const stmt = `
+INSERT INTO notifications (type, platform, username, amount, message, metadata, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+`
+
+	res, err := s.db.ExecContext(
+		ctx,
+		stmt,
+		string(notification.Type),
+		string(notification.Platform),
+		notification.Username,
+		notification.Amount,
+		notification.Message,
+		encodeMetadata(notification.Metadata),
+		notification.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: save notification: %w", err)
+	}
+
+	if id, err := res.LastInsertId(); err == nil {
+		notification.ID = id
+	}
+
+	return notification, nil
+}
+
+func (s *CredentialStore) ListNotifications(ctx context.Context, limit int) ([]*domain.Notification, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	const query = `
+SELECT id, type, platform, username, amount, message, metadata, created_at
+FROM notifications
+ORDER BY created_at DESC
+LIMIT ?;
+`
+
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list notifications: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*domain.Notification
+	for rows.Next() {
+		var (
+			record                 domain.Notification
+			notificationType, plat sql.NullString
+			username, message      sql.NullString
+			metadata               sql.NullString
+			amount                 sql.NullFloat64
+			createdAt              sql.NullTime
+		)
+
+		if err := rows.Scan(
+			&record.ID,
+			&notificationType,
+			&plat,
+			&username,
+			&amount,
+			&message,
+			&metadata,
+			&createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("sqlite: scan notification: %w", err)
+		}
+
+		record.Type = domain.NotificationType(notificationType.String)
+		record.Platform = domain.Platform(plat.String)
+		record.Username = username.String
+		record.Amount = amount.Float64
+		record.Message = message.String
+		record.Metadata = decodeMetadata(metadata.String)
+		record.CreatedAt = createdAt.Time
+
+		out = append(out, &record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: list notifications rows: %w", err)
+	}
+
+	return out, nil
+}
+
 func encodeStringSlice(values []string) interface{} {
 	clean := make([]string, 0, len(values))
 	for _, v := range values {
@@ -425,6 +540,7 @@ func decodePlatforms(raw string) []domain.Platform {
 }
 
 var _ domain.CustomCommandRepository = (*CredentialStore)(nil)
+var _ domain.NotificationRepository = (*CredentialStore)(nil)
 
 func (s *CredentialStore) DeleteCustomCommand(ctx context.Context, name string) error {
 	const stmt = `DELETE FROM custom_commands WHERE LOWER(name) = LOWER(?);`

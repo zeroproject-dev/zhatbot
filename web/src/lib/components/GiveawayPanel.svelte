@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { getSharedChatStream } from '$lib/services/chat-stream';
+	import { createNotification } from '$lib/services/notifications';
+	import { notificationsStore } from '$lib/stores/notifications';
 	import type { ChatMessage } from '$lib/types/chat';
 	import { getLocale } from '$lib/paraglide/runtime';
 	import { m } from '$lib/paraglide/messages.js';
@@ -17,11 +19,13 @@
 	const chatStream = getSharedChatStream();
 
 	let keywordInput = '';
+	let giveawayTitleInput = '';
 	let activeKeyword = '';
+	let activeGiveawayTitle = '';
 	let phase: Phase = 'idle';
 	let participants: Participant[] = [];
 	let searchQuery = '';
-	let keywordError: string | null = null;
+	let setupError: string | null = null;
 	let winner: Participant | null = null;
 	let winnerModalOpen = false;
 	let winnerMessages: ChatMessage[] = [];
@@ -29,6 +33,7 @@
 
 	let filteredParticipants: Participant[] = [];
 	let canReroll = false;
+	let savingWinner = false;
 
 	const participantIds = new Set<string>();
 	const disqualifiedIds = new Set<string>();
@@ -104,33 +109,42 @@
 
 	const resetGiveaway = () => {
 		keywordInput = '';
+		giveawayTitleInput = '';
 		activeKeyword = '';
+		activeGiveawayTitle = '';
 		phase = 'idle';
 		participants = [];
 		filteredParticipants = [];
 		searchQuery = '';
-		keywordError = null;
+		setupError = null;
 		winner = null;
 		winnerModalOpen = false;
 		modalError = null;
 		participantIds.clear();
 		disqualifiedIds.clear();
+		savingWinner = false;
 		resetWinnerTracking();
 	};
 
 	const handleKeywordSubmit = (event: SubmitEvent) => {
 		event.preventDefault();
+		const title = giveawayTitleInput.trim();
 		const nextKeyword = keywordInput.trim();
-		if (nextKeyword.length === 0) {
-			keywordError = m.giveaway_keyword_error_required();
+		if (title.length === 0) {
+			setupError = m.giveaway_title_error_required();
 			return;
 		}
+		if (nextKeyword.length === 0) {
+			setupError = m.giveaway_keyword_error_required();
+			return;
+		}
+		activeGiveawayTitle = title;
 		activeKeyword = nextKeyword;
 		phase = 'collecting';
 		participants = [];
 		filteredParticipants = [];
 		searchQuery = '';
-		keywordError = null;
+		setupError = null;
 		winner = null;
 		winnerModalOpen = false;
 		modalError = null;
@@ -143,7 +157,7 @@
 		if (phase !== 'collecting') return;
 		const eligible = getEligibleParticipants();
 		if (eligible.length === 0) {
-			keywordError = m.giveaway_finish_error_no_participants();
+			setupError = m.giveaway_finish_error_no_participants();
 			return;
 		}
 		phase = 'closed';
@@ -164,6 +178,7 @@
 		winner = pool[index];
 		winnerModalOpen = true;
 		resetWinnerTracking();
+		void persistWinnerNotification(winner);
 	};
 
 	const rerollWinner = () => {
@@ -179,9 +194,34 @@
 		selectRandomWinner(pool);
 	};
 
+	const persistWinnerNotification = async (participant: Participant | null) => {
+		if (!participant) return;
+		savingWinner = true;
+		modalError = null;
+		try {
+			const saved = await createNotification({
+				type: 'giveaway_winner',
+				username: participant.username,
+				platform: participant.platform,
+				metadata: {
+					giveaway_title: activeGiveawayTitle,
+					giveaway_keyword: activeKeyword,
+					channel_id: participant.channel_id
+				}
+			});
+			notificationsStore.prepend(saved);
+		} catch (error) {
+			console.error('giveaway: persist winner failed', error);
+			modalError = m.giveaway_modal_save_error();
+		} finally {
+			savingWinner = false;
+		}
+	};
+
 	const closeModal = () => {
 		winnerModalOpen = false;
 		modalError = null;
+		savingWinner = false;
 	};
 
 	const formatTimestamp = (timestamp?: string) => {
@@ -197,6 +237,12 @@
 
 	const phaseInstructions = () => {
 		if (phase === 'collecting' && activeKeyword) {
+			if (activeGiveawayTitle) {
+				return m.giveaway_keyword_hint_with_title({
+					keyword: activeKeyword,
+					title: activeGiveawayTitle
+				});
+			}
 			return m.giveaway_keyword_hint({ keyword: activeKeyword });
 		}
 		if (phase === 'closed') {
@@ -272,31 +318,52 @@
 						{m.giveaway_reset_button()}
 					</button>
 				</div>
-				<div class="flex flex-col gap-2 sm:flex-row">
-					<input
-						id="keyword-input"
-						type="text"
-						class="w-full rounded-xl border border-white/30 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/50 focus:border-white/70 focus:outline-none disabled:opacity-50"
-						placeholder={m.giveaway_keyword_placeholder()}
-						bind:value={keywordInput}
-						disabled={phase === 'collecting'}
-					/>
-					<button
-						type="submit"
-						class="rounded-xl border border-white/30 bg-white/10 px-4 py-2 text-sm font-semibold tracking-wide text-white uppercase transition hover:bg-white/20 disabled:opacity-60"
-						disabled={phase === 'collecting'}
-					>
-						{m.giveaway_keyword_action()}
-					</button>
+				<div class="space-y-2">
+					<div class="flex flex-col gap-1">
+						<label class="text-[11px] uppercase tracking-wide text-white/50" for="giveaway-title">
+							{m.giveaway_title_label()}
+						</label>
+						<input
+							id="giveaway-title"
+							type="text"
+							class="w-full rounded-xl border border-white/30 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/50 focus:border-white/70 focus:outline-none disabled:opacity-50"
+							placeholder={m.giveaway_title_placeholder()}
+							bind:value={giveawayTitleInput}
+							disabled={phase === 'collecting'}
+						/>
+						<p class="text-xs text-white/50">{m.giveaway_title_hint()}</p>
+					</div>
+					<div class="flex flex-col gap-2 sm:flex-row">
+						<input
+							id="keyword-input"
+							type="text"
+							class="w-full rounded-xl border border-white/30 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/50 focus:border-white/70 focus:outline-none disabled:opacity-50"
+							placeholder={m.giveaway_keyword_placeholder()}
+							bind:value={keywordInput}
+							disabled={phase === 'collecting'}
+						/>
+						<button
+							type="submit"
+							class="rounded-xl border border-white/30 bg-white/10 px-4 py-2 text-sm font-semibold tracking-wide text-white uppercase transition hover:bg-white/20 disabled:opacity-60"
+							disabled={phase === 'collecting'}
+						>
+							{m.giveaway_keyword_action()}
+						</button>
+					</div>
 				</div>
 				<p class="text-xs text-white/70">{phaseInstructions()}</p>
-				{#if keywordError}
-					<p class="text-xs text-rose-200" aria-live="polite">{keywordError}</p>
+				{#if setupError}
+					<p class="text-xs text-rose-200" aria-live="polite">{setupError}</p>
 				{/if}
 				{#if phase === 'collecting' && activeKeyword}
 					<p class="rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold text-emerald-100">
 						{m.giveaway_keyword_hint_command({ keyword: activeKeyword })}
 					</p>
+					{#if activeGiveawayTitle}
+						<p class="text-xs text-white/70">
+							{m.giveaway_active_title({ title: activeGiveawayTitle })}
+						</p>
+					{/if}
 				{/if}
 			</div>
 		</form>
@@ -310,6 +377,11 @@
 					<p class="text-xs text-slate-500 dark:text-slate-400">
 						{m.giveaway_participants_count({ count: participants.length })}
 					</p>
+					{#if activeGiveawayTitle}
+						<p class="text-xs text-slate-500 dark:text-slate-400">
+							{m.giveaway_label_active_title({ title: activeGiveawayTitle })}
+						</p>
+					{/if}
 				</div>
 				<button
 					type="button"
@@ -376,6 +448,11 @@
 				<p class="text-sm text-slate-500 dark:text-slate-400">
 					{m.giveaway_modal_subtitle({ username: winner.username })}
 				</p>
+				{#if activeGiveawayTitle}
+					<p class="text-xs text-slate-500 dark:text-slate-400">
+						{m.giveaway_modal_giveaway_label({ title: activeGiveawayTitle })}
+					</p>
+				{/if}
 			</header>
 
 			<div class="mt-4 flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-400">
@@ -411,6 +488,11 @@
 				{#if modalError}
 					<p class="mt-3 text-xs text-rose-500 dark:text-rose-300" aria-live="polite">{modalError}</p>
 				{/if}
+				{#if savingWinner && !modalError}
+					<p class="mt-3 text-xs text-slate-500 dark:text-slate-400" aria-live="polite">
+						{m.giveaway_modal_logging()}
+					</p>
+				{/if}
 			</div>
 
 			<div class="mt-6 flex flex-wrap justify-end gap-3">
@@ -425,7 +507,7 @@
 					type="button"
 					class="rounded-full bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-400 disabled:opacity-60"
 					onclick={rerollWinner}
-					disabled={!canReroll}
+					disabled={!canReroll || savingWinner}
 				>
 					{m.giveaway_modal_reroll()}
 				</button>

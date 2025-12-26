@@ -3,6 +3,7 @@
 	import AuthActions from '$lib/components/AuthActions.svelte';
 	import StreamInfoPanel from '$lib/components/StreamInfoPanel.svelte';
 	import GiveawayPanel from '$lib/components/GiveawayPanel.svelte';
+	import NotificationPanel from '$lib/components/NotificationPanel.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 
 	type TabId = 'stream' | 'giveaway';
@@ -49,6 +50,7 @@
 				<div class="flex w-full flex-col gap-6">
 					<AuthActions />
 					<StreamInfoPanel />
+					<NotificationPanel />
 				</div>
 			</section>
 		</div>
@@ -58,7 +60,10 @@
 				<ChatPanel />
 			</section>
 			<section class="flex flex-1">
-				<GiveawayPanel />
+				<div class="flex w-full flex-col gap-6">
+					<NotificationPanel />
+					<GiveawayPanel />
+				</div>
 			</section>
 		</div>
 	{/if}

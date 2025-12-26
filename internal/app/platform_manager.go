@@ -29,6 +29,7 @@ type ManagerConfig struct {
 type KickConfig struct {
 	BroadcasterUserID int
 	ChatroomID        int
+	EventHandler      kickadapter.EventHandler
 }
 
 type PlatformManager struct {
@@ -150,6 +151,7 @@ func (m *PlatformManager) enableKick(token string) error {
 		AccessToken:       token,
 		BroadcasterUserID: m.kickCfg.BroadcasterUserID,
 		ChatroomID:        m.kickCfg.ChatroomID,
+		EventHandler:      m.kickCfg.EventHandler,
 	})
 
 	multiOut := m.multiOut

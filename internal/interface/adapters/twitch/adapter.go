@@ -15,12 +15,14 @@ import (
 )
 
 type Config struct {
-	Username   string
-	OAuthToken string
-	Channels   []string
+	Username          string
+	OAuthToken        string
+	Channels          []string
+	UserNoticeHandler UserNoticeHandler
 }
 
 type MessageHandler func(ctx context.Context, msg domain.Message) error
+type UserNoticeHandler func(irc.UserNotice)
 
 type Adapter struct {
 	cfg     Config
@@ -68,6 +70,11 @@ func (a *Adapter) Start(ctx context.Context) error {
 			log.Printf("twitch: error en handler: %v", err)
 		}
 	})
+	if a.cfg.UserNoticeHandler != nil {
+		conn.OnChannelUserNotice(func(notice irc.UserNotice) {
+			a.cfg.UserNoticeHandler(notice)
+		})
+	}
 
 	if err := conn.Connect(); err != nil {
 		return fmt.Errorf("twitch: Connect: %w", err)

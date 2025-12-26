@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,13 +29,14 @@ const (
 )
 
 type Config struct {
-	Addr            string
-	CredentialRepo  domain.CredentialRepository
-	CredentialHook  CredentialHook
-	Twitch          *TwitchOAuthConfig
-	Kick            *KickOAuthConfig
-	CategoryManager CategoryManager
-	TTSManager      TTSManager
+	Addr             string
+	CredentialRepo   domain.CredentialRepository
+	NotificationRepo domain.NotificationRepository
+	CredentialHook   CredentialHook
+	Twitch           *TwitchOAuthConfig
+	Kick             *KickOAuthConfig
+	CategoryManager  CategoryManager
+	TTSManager       TTSManager
 }
 
 type CategoryManager interface {
@@ -132,8 +134,9 @@ func (c *KickOAuthConfig) scopesForRole(role string) []kicksdk.OAuthScope {
 }
 
 type apiHandlers struct {
-	credRepo domain.CredentialRepository
-	state    *oauthStateStore
+	credRepo      domain.CredentialRepository
+	notifications domain.NotificationRepository
+	state         *oauthStateStore
 
 	httpClient *http.Client
 
@@ -158,8 +161,9 @@ func newAPIHandlers(cfg Config) *apiHandlers {
 	}
 
 	return &apiHandlers{
-		credRepo: cfg.CredentialRepo,
-		state:    newOAuthStateStore(),
+		credRepo:      cfg.CredentialRepo,
+		notifications: cfg.NotificationRepo,
+		state:         newOAuthStateStore(),
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -186,6 +190,9 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 	if a.tts != nil {
 		mux.HandleFunc("/api/tts/status", a.withCORS(a.handleTTSStatus))
 		mux.HandleFunc("/api/tts/settings", a.withCORS(a.handleTTSUpdate))
+	}
+	if a.notifications != nil {
+		mux.HandleFunc("/api/notifications", a.withCORS(a.handleNotifications))
 	}
 
 	if a.twitchCfg != nil && a.twitchCfg.enabled() {
@@ -438,6 +445,79 @@ func (a *apiHandlers) handleTTSUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (a *apiHandlers) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		a.handleNotificationsList(w, r)
+	case http.MethodPost:
+		a.handleNotificationsCreate(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *apiHandlers) handleNotificationsList(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.notifications == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	ctx := r.Context()
+	items, err := a.notifications.ListNotifications(ctx, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load notifications")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toNotificationResponseList(items))
+}
+
+func (a *apiHandlers) handleNotificationsCreate(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.notifications == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	defer r.Body.Close()
+
+	var payload notificationRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+
+	notificationType := normalizeNotificationType(payload.Type)
+	if notificationType == "" {
+		writeError(w, http.StatusBadRequest, "invalid type")
+		return
+	}
+
+	record := &domain.Notification{
+		Type:     notificationType,
+		Platform: domain.Platform(strings.TrimSpace(payload.Platform)),
+		Username: strings.TrimSpace(payload.Username),
+		Amount:   payload.Amount,
+		Message:  strings.TrimSpace(payload.Message),
+		Metadata: payload.Metadata,
+	}
+
+	ctx := r.Context()
+	saved, err := a.notifications.SaveNotification(ctx, record)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save notification")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toNotificationResponse(saved))
 }
 
 func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) {
@@ -829,6 +909,75 @@ func (a *apiHandlers) notifyCredentialHook(ctx context.Context, cred *domain.Cre
 	a.hook(ctx, cred)
 }
 
+type notificationRequest struct {
+	Type     string            `json:"type"`
+	Platform string            `json:"platform"`
+	Username string            `json:"username"`
+	Amount   float64           `json:"amount"`
+	Message  string            `json:"message"`
+	Metadata map[string]string `json:"metadata"`
+}
+
+type notificationResponse struct {
+	ID        int64             `json:"id"`
+	Type      string            `json:"type"`
+	Platform  string            `json:"platform"`
+	Username  string            `json:"username"`
+	Amount    float64           `json:"amount"`
+	Message   string            `json:"message"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	CreatedAt string            `json:"created_at"`
+}
+
+func toNotificationResponse(item *domain.Notification) notificationResponse {
+	if item == nil {
+		return notificationResponse{}
+	}
+
+	var created string
+	if !item.CreatedAt.IsZero() {
+		created = item.CreatedAt.UTC().Format(time.RFC3339)
+	}
+
+	return notificationResponse{
+		ID:        item.ID,
+		Type:      string(item.Type),
+		Platform:  string(item.Platform),
+		Username:  item.Username,
+		Amount:    item.Amount,
+		Message:   item.Message,
+		Metadata:  item.Metadata,
+		CreatedAt: created,
+	}
+}
+
+func toNotificationResponseList(items []*domain.Notification) []notificationResponse {
+	out := make([]notificationResponse, 0, len(items))
+	for _, item := range items {
+		out = append(out, toNotificationResponse(item))
+	}
+	return out
+}
+
+func normalizeNotificationType(value string) domain.NotificationType {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(domain.NotificationSubscription):
+		return domain.NotificationSubscription
+	case string(domain.NotificationDonation):
+		return domain.NotificationDonation
+	case string(domain.NotificationBits):
+		return domain.NotificationBits
+	case string(domain.NotificationGiveawayWinner):
+		return domain.NotificationGiveawayWinner
+	case string(domain.NotificationGeneric):
+		return domain.NotificationGeneric
+	case "":
+		return ""
+	default:
+		return domain.NotificationGeneric
+	}
+}
+
 func parsePlatformParam(p string) domain.Platform {
 	switch strings.ToLower(strings.TrimSpace(p)) {
 	case string(domain.PlatformTwitch):
@@ -924,4 +1073,5 @@ func randomStateID() string {
 	}
 	return hex.EncodeToString(buf)
 }
+
 type CredentialHook func(ctx context.Context, cred *domain.Credential)

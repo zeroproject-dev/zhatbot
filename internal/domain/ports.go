@@ -40,3 +40,8 @@ type CredentialRepository interface {
 	List(ctx context.Context) ([]*Credential, error)
 	Delete(ctx context.Context, platform Platform, role string) error
 }
+
+type NotificationRepository interface {
+	SaveNotification(ctx context.Context, notification *Notification) (*Notification, error)
+	ListNotifications(ctx context.Context, limit int) ([]*Notification, error)
+}

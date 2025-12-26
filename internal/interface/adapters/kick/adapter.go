@@ -26,9 +26,13 @@ type Config struct {
 	// ID del chatroom (no es el mismo que el userID)
 	// lo sacas de: https://kick.com/api/v2/channels/{slug}, campo "chatroom":{"id":...}
 	ChatroomID int
+
+	// EventHandler permite interceptar cualquier mensaje crudo del chatroom (subs, tips, etc.)
+	EventHandler EventHandler
 }
 
 type MessageHandler func(ctx context.Context, msg domain.Message) error
+type EventHandler func(msg kickchatwrapper.ChatMessage)
 
 type Adapter struct {
 	cfg     Config
@@ -94,6 +98,10 @@ func (a *Adapter) Start(ctx context.Context) error {
 				if !ok {
 					log.Println("kick: canal de mensajes cerrado")
 					return
+				}
+
+				if h := a.cfg.EventHandler; h != nil {
+					go h(m)
 				}
 
 				a.mu.RLock()
