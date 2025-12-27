@@ -13,6 +13,7 @@ import (
 	kickadapter "zhatBot/internal/interface/adapters/kick"
 	"zhatBot/internal/interface/outs"
 	categoryusecase "zhatBot/internal/usecase/category"
+	statususecase "zhatBot/internal/usecase/status"
 	"zhatBot/internal/usecase/stream"
 )
 
@@ -23,6 +24,7 @@ type ManagerConfig struct {
 	Category *categoryusecase.Service
 	Resolver *stream.Resolver
 	MultiOut *outs.MultiSender
+	Status   *statususecase.Resolver
 	Kick     KickConfig
 }
 
@@ -37,6 +39,7 @@ type PlatformManager struct {
 	category *categoryusecase.Service
 	resolver *stream.Resolver
 	multiOut *outs.MultiSender
+	status   *statususecase.Resolver
 
 	handlerMu sync.RWMutex
 	handler   MessageHandler
@@ -65,6 +68,7 @@ func NewPlatformManager(cfg ManagerConfig) *PlatformManager {
 		category: cfg.Category,
 		resolver: cfg.Resolver,
 		multiOut: cfg.MultiOut,
+		status:   cfg.Status,
 		kickCfg:  cfg.Kick,
 	}
 }
@@ -164,6 +168,9 @@ func (m *PlatformManager) enableKick(token string) error {
 	if m.category != nil {
 		m.category.SetKickService(streamSvcIface)
 	}
+	if m.status != nil {
+		m.status.Set(domain.PlatformKick, kickinfra.NewKickStatusAdapter(streamSvcIface, m.kickCfg.BroadcasterUserID))
+	}
 
 	handler := m.getHandler()
 	if handler != nil {
@@ -204,6 +211,9 @@ func (m *PlatformManager) disableKick() {
 	}
 	if m.category != nil {
 		m.category.SetKickService(nil)
+	}
+	if m.status != nil {
+		m.status.Set(domain.PlatformKick, nil)
 	}
 	m.kick = nil
 	log.Println("kick manager: Kick deshabilitado.")

@@ -140,5 +140,19 @@
 	"notifications_default_giveaway_message_fallback": "Giveaway winner selected.",
 	"notifications_default_generic_message": "New activity recorded.",
 	"notifications_amount": "Amount: {amount}",
-	"notifications_label_giveaway_title": "Giveaway: {title}"
+	"notifications_label_giveaway_title": "Giveaway: {title}",
+	"stream_status_title": "Live status",
+	"stream_status_description": "See which platforms are currently streaming.",
+	"stream_status_refresh": "Refresh",
+	"stream_status_refreshing": "Refreshing…",
+	"stream_status_error": "We couldn't load the live status.",
+	"stream_status_empty": "No status available yet.",
+	"stream_status_live": "Live now",
+	"stream_status_offline": "Offline",
+	"stream_status_viewers": "{count} viewers",
+	"stream_status_started_at": "Live since {time}",
+	"stream_status_platform_twitch": "Twitch",
+	"stream_status_platform_kick": "Kick",
+	"stream_status_platform_unknown": "Unknown",
+	"stream_status_open_link": "Open stream"
 }

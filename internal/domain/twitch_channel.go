@@ -13,4 +13,6 @@ type TwitchChannelService interface {
 	UpdateCategory(ctx context.Context, broadcasterID, gameName string) error
 
 	SearchCategories(ctx context.Context, query string) ([]CategoryOption, error)
+
+	GetStreamStatus(ctx context.Context, broadcasterID string) (StreamStatus, error)
 }

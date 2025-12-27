@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
+	import { onMount } from 'svelte';
 	import {
 		getSharedChatStream,
 		sendChatCommand,
@@ -13,7 +14,9 @@
 	} from '$lib/services/categories';
 	import TTSMonitor from '$lib/components/TTSMonitor.svelte';
 	import TTSControls from '$lib/components/TTSControls.svelte';
+	import { fetchStreamStatuses, type StreamStatusRecord } from '$lib/services/stream-status';
 	import { m } from '$lib/paraglide/messages.js';
+	import { getLocale } from '$lib/paraglide/runtime';
 
 	type Feedback = { type: 'success' | 'error'; message: string };
 
@@ -23,6 +26,9 @@
 	let titleDraft = $state('');
 	let titleLoading = $state(false);
 	let titleFeedback = $state<Feedback | null>(null);
+	let streamStatuses = $state<StreamStatusRecord[]>([]);
+	let streamStatusLoading = $state(false);
+	let streamStatusError = $state<string | null>(null);
 
 	const createState = () => ({
 		query: '',
@@ -159,6 +165,57 @@
 			platformState[platform].applyingId = null;
 		}
 	};
+
+	const refreshStreamStatuses = async () => {
+		if (!browser) return;
+		streamStatusLoading = true;
+		streamStatusError = null;
+		try {
+			streamStatuses = await fetchStreamStatuses();
+		} catch (error) {
+			console.error('stream-status: fetch failed', error);
+			streamStatusError = m.stream_status_error();
+		} finally {
+			streamStatusLoading = false;
+		}
+	};
+
+	onMount(() => {
+		if (!browser) {
+			return undefined;
+		}
+		void refreshStreamStatuses();
+		const interval = window.setInterval(() => {
+			void refreshStreamStatuses();
+		}, 60_000);
+		return () => {
+			window.clearInterval(interval);
+		};
+	});
+
+	const platformLabel = (platform: string) => {
+		const normalized = platform?.toLowerCase();
+		if (normalized === 'twitch') return m.stream_status_platform_twitch();
+		if (normalized === 'kick') return m.stream_status_platform_kick();
+		return platform?.toUpperCase() || m.stream_status_platform_unknown();
+	};
+
+	const statusClasses = (isLive: boolean) =>
+		isLive ? 'bg-emerald-100/80 text-emerald-900 dark:bg-emerald-500/20 dark:text-emerald-100' : 'bg-slate-200/80 text-slate-700 dark:bg-slate-700/30 dark:text-slate-200';
+
+	const statusDotClasses = (isLive: boolean) => (isLive ? 'bg-emerald-500' : 'bg-slate-400');
+
+	const formatStatusTime = (timestamp?: string) => {
+		if (!timestamp) return '';
+		const date = new Date(timestamp);
+		if (Number.isNaN(date.getTime())) return '';
+		return date.toLocaleString(getLocale(), {
+			hour: '2-digit',
+			minute: '2-digit',
+			day: '2-digit',
+			month: 'short'
+		});
+	};
 </script>
 
 <section class="flex h-full flex-col rounded-3xl border border-slate-200/70 bg-white/95 p-6 text-slate-800 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-100">
@@ -170,6 +227,78 @@
 	</header>
 
 	<div class="mt-5 space-y-6">
+		<article class="rounded-2xl border border-slate-200/70 bg-white/90 p-4 text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-100">
+			<div class="flex flex-wrap items-center gap-3">
+				<div>
+					<p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+						{m.stream_status_title()}
+					</p>
+					<p class="text-sm text-slate-500 dark:text-slate-400">{m.stream_status_description()}</p>
+				</div>
+				<button
+					type="button"
+					class="ml-auto rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+					onclick={() => refreshStreamStatuses()}
+					disabled={streamStatusLoading}
+				>
+					{streamStatusLoading ? m.stream_status_refreshing() : m.stream_status_refresh()}
+				</button>
+			</div>
+			{#if streamStatusError}
+				<p class="mt-3 rounded-xl bg-rose-500/10 px-3 py-2 text-xs text-rose-600 dark:text-rose-300" aria-live="polite">
+					{streamStatusError}
+				</p>
+			{:else if streamStatuses.length === 0}
+				<p class="mt-3 rounded-xl border border-dashed border-slate-300/70 px-3 py-2 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+					{streamStatusLoading ? m.stream_status_refreshing() : m.stream_status_empty()}
+				</p>
+			{:else}
+				<ul class="mt-4 space-y-3">
+					{#each streamStatuses as entry}
+						<li class="rounded-2xl border border-slate-200/70 bg-white/95 p-3 text-sm dark:border-slate-800 dark:bg-slate-900/60">
+							<div class="flex items-center gap-2">
+								<span
+									class={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase ${statusClasses(entry.is_live)}`}
+								>
+									<span class={`h-1.5 w-1.5 rounded-full ${statusDotClasses(entry.is_live)}`}></span>
+									{platformLabel(entry.platform)}
+								</span>
+								{#if entry.title}
+									<p class="text-sm font-semibold text-slate-800 dark:text-slate-100">{entry.title}</p>
+								{/if}
+								{#if entry.url}
+									<a
+										class="ml-auto text-xs text-blue-600 underline dark:text-blue-300"
+										href={entry.url}
+										target="_blank"
+										rel="noreferrer"
+									>
+										{m.stream_status_open_link()}
+									</a>
+								{/if}
+							</div>
+							<div class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+								{#if entry.is_live}
+									<p>{m.stream_status_live()}</p>
+									{#if entry.viewer_count}
+										<p>{m.stream_status_viewers({ count: entry.viewer_count })}</p>
+									{/if}
+									{#if entry.started_at}
+										<p>{m.stream_status_started_at({ time: formatStatusTime(entry.started_at) })}</p>
+									{/if}
+								{:else}
+									<p>{m.stream_status_offline()}</p>
+								{/if}
+								{#if entry.game_title}
+									<p>{entry.game_title}</p>
+								{/if}
+							</div>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</article>
+
 		<article class="rounded-2xl border border-slate-200/70 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-4 py-5 text-white dark:border-slate-700">
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<div>

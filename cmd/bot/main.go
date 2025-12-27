@@ -29,6 +29,7 @@ import (
 	credentialsusecase "zhatBot/internal/usecase/credentials"
 	"zhatBot/internal/usecase/handle_message"
 	"zhatBot/internal/usecase/notifications"
+	statususecase "zhatBot/internal/usecase/status"
 	"zhatBot/internal/usecase/stream"
 	ttsusecase "zhatBot/internal/usecase/tts"
 )
@@ -54,11 +55,13 @@ func main() {
 	resolver := stream.NewResolver(nil, nil)
 	multiOut := outs.NewMultiSender()
 	eventLogger := notifications.NewEventLogger()
+	statusResolver := statususecase.NewResolver()
 
 	platformMgr := app.NewPlatformManager(app.ManagerConfig{
 		Context:  ctx,
 		Category: categorySvc,
 		Resolver: resolver,
+		Status:   statusResolver,
 		MultiOut: multiOut,
 		Kick: app.KickConfig{
 			BroadcasterUserID: envInt("KICK_BROADCASTER_USER_ID"),
@@ -124,6 +127,7 @@ func main() {
 		NotificationRepo: credStore,
 		CredentialHook:   platformMgr.HandleCredentialUpdate,
 		CategoryManager:  categorySvc,
+		StatusResolver:   statusResolver,
 	}
 
 	if cfg.TwitchClientId != "" && cfg.TwitchClientSecret != "" && cfg.TwitchRedirectURI != "" {
@@ -159,6 +163,7 @@ func main() {
 			} else {
 				categorySvc.SetTwitchService(twitchAPIService, broadcasterID)
 				twitchTitleSvc = twitchinfra.NewTwitchTitleAdapter(twitchAPIService, broadcasterID)
+				statusResolver.Set(domain.PlatformTwitch, twitchinfra.NewTwitchStatusAdapter(twitchAPIService, broadcasterID))
 			}
 		}
 	}

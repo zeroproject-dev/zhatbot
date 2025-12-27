@@ -20,6 +20,7 @@ import (
 	kicksdk "github.com/glichtv/kick-sdk"
 
 	"zhatBot/internal/domain"
+	statususecase "zhatBot/internal/usecase/status"
 	ttsusecase "zhatBot/internal/usecase/tts"
 )
 
@@ -37,6 +38,7 @@ type Config struct {
 	Kick             *KickOAuthConfig
 	CategoryManager  CategoryManager
 	TTSManager       TTSManager
+	StatusResolver   *statususecase.Resolver
 }
 
 type CategoryManager interface {
@@ -145,6 +147,7 @@ type apiHandlers struct {
 	kickOAuth *kicksdk.Client
 	category  CategoryManager
 	tts       TTSManager
+	status    *statususecase.Resolver
 	hook      CredentialHook
 }
 
@@ -172,6 +175,7 @@ func newAPIHandlers(cfg Config) *apiHandlers {
 		kickOAuth: kickClient,
 		category:  cfg.CategoryManager,
 		tts:       cfg.TTSManager,
+		status:    cfg.StatusResolver,
 		hook:      cfg.CredentialHook,
 	}
 }
@@ -193,6 +197,9 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 	}
 	if a.notifications != nil {
 		mux.HandleFunc("/api/notifications", a.withCORS(a.handleNotifications))
+	}
+	if a.status != nil {
+		mux.HandleFunc("/api/streams/status", a.withCORS(a.handleStreamStatus))
 	}
 
 	if a.twitchCfg != nil && a.twitchCfg.enabled() {
@@ -518,6 +525,37 @@ func (a *apiHandlers) handleNotificationsCreate(w http.ResponseWriter, r *http.R
 	}
 
 	writeJSON(w, http.StatusOK, toNotificationResponse(saved))
+}
+
+func (a *apiHandlers) handleStreamStatus(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.status == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	statuses := a.status.Snapshot(r.Context())
+	response := make([]streamStatusResponse, 0, len(statuses))
+	for _, entry := range statuses {
+		response = append(response, streamStatusResponse{
+			Platform:    string(entry.Platform),
+			IsLive:      entry.IsLive,
+			Title:       entry.Title,
+			GameTitle:   entry.GameTitle,
+			ViewerCount: entry.ViewerCount,
+			URL:         entry.URL,
+			StartedAt:   formatTime(entry.StartedAt),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) {
@@ -929,6 +967,16 @@ type notificationResponse struct {
 	CreatedAt string            `json:"created_at"`
 }
 
+type streamStatusResponse struct {
+	Platform    string `json:"platform"`
+	IsLive      bool   `json:"is_live"`
+	Title       string `json:"title,omitempty"`
+	GameTitle   string `json:"game_title,omitempty"`
+	ViewerCount int    `json:"viewer_count,omitempty"`
+	URL         string `json:"url,omitempty"`
+	StartedAt   string `json:"started_at,omitempty"`
+}
+
 func toNotificationResponse(item *domain.Notification) notificationResponse {
 	if item == nil {
 		return notificationResponse{}
@@ -976,6 +1024,13 @@ func normalizeNotificationType(value string) domain.NotificationType {
 	default:
 		return domain.NotificationGeneric
 	}
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func parsePlatformParam(p string) domain.Platform {

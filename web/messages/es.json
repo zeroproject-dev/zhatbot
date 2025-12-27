@@ -140,5 +140,19 @@
 	"notifications_default_giveaway_message_fallback": "Se seleccionó un ganador.",
 	"notifications_default_generic_message": "Nueva actividad registrada.",
 	"notifications_amount": "Monto: {amount}",
-	"notifications_label_giveaway_title": "Sorteo: {title}"
+	"notifications_label_giveaway_title": "Sorteo: {title}",
+	"stream_status_title": "Estado en vivo",
+	"stream_status_description": "Revisa qué plataformas están transmitiendo ahora.",
+	"stream_status_refresh": "Actualizar",
+	"stream_status_refreshing": "Actualizando…",
+	"stream_status_error": "No pudimos cargar el estado en vivo.",
+	"stream_status_empty": "Aún no hay estado disponible.",
+	"stream_status_live": "En vivo",
+	"stream_status_offline": "Sin transmisión",
+	"stream_status_viewers": "{count} espectadores",
+	"stream_status_started_at": "En vivo desde {time}",
+	"stream_status_platform_twitch": "Twitch",
+	"stream_status_platform_kick": "Kick",
+	"stream_status_platform_unknown": "Desconocido",
+	"stream_status_open_link": "Abrir transmisión"
 }

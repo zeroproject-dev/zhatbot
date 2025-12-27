@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	kicksdk "github.com/glichtv/kick-sdk"
 	optional "github.com/glichtv/kick-sdk/optional"
@@ -147,4 +148,37 @@ func (s *KickStreamService) getClient() *kicksdk.Client {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.client
+}
+
+func (s *KickStreamService) GetStreamStatus(ctx context.Context, broadcasterUserID int) (domain.StreamStatus, error) {
+	status := domain.StreamStatus{
+		Platform: domain.PlatformKick,
+	}
+
+	client := s.getClient()
+	resp, err := client.Channels().GetByBroadcasterIDs(ctx, kicksdk.GetChannelsInput{
+		BroadcasterUserIDs: []int{broadcasterUserID},
+	})
+	if err != nil {
+		return status, fmt.Errorf("kick: obtener canal: %w", err)
+	}
+
+	if len(resp.Payload) == 0 {
+		return status, fmt.Errorf("kick: canal con broadcaster_user_id=%d no encontrado", broadcasterUserID)
+	}
+
+	channel := resp.Payload[0]
+	status.Title = channel.StreamTitle
+	status.GameTitle = channel.Category.Name
+
+	if channel.Stream.IsLive {
+		status.IsLive = true
+		status.ViewerCount = channel.Stream.ViewerCount
+		status.URL = channel.Stream.URL
+		if parsed, err := time.Parse(time.RFC3339, channel.Stream.StartTime); err == nil {
+			status.StartedAt = parsed
+		}
+	}
+
+	return status, nil
 }

@@ -6,4 +6,5 @@ type KickStreamService interface {
 	SetTitle(ctx context.Context, newTitle string) error
 	SetCategory(ctx context.Context, categoryName string) error
 	SearchCategories(ctx context.Context, query string) ([]CategoryOption, error)
+	GetStreamStatus(ctx context.Context, broadcasterUserID int) (StreamStatus, error)
 }

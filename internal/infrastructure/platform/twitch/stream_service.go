@@ -142,3 +142,36 @@ func (s *TwitchStreamService) getClient() *helix.Client {
 	defer s.mu.RUnlock()
 	return s.client
 }
+
+func (s *TwitchStreamService) GetStreamStatus(ctx context.Context, broadcasterID string) (domain.StreamStatus, error) {
+	status := domain.StreamStatus{
+		Platform: domain.PlatformTwitch,
+	}
+
+	client := s.getClient()
+	resp, err := client.GetStreams(&helix.StreamsParams{
+		UserIDs: []string{broadcasterID},
+		First:   1,
+	})
+	if err != nil {
+		return status, fmt.Errorf("helix: GetStreams: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return status, fmt.Errorf("helix: GetStreams failed (%d: %s) %s", resp.StatusCode, resp.Error, resp.ErrorMessage)
+	}
+
+	if len(resp.Data.Streams) == 0 {
+		return status, nil
+	}
+
+	stream := resp.Data.Streams[0]
+	status.IsLive = true
+	status.Title = stream.Title
+	status.GameTitle = stream.GameName
+	status.ViewerCount = stream.ViewerCount
+	status.StartedAt = stream.StartedAt
+	status.URL = fmt.Sprintf("https://twitch.tv/%s", stream.UserLogin)
+
+	return status, nil
+}
