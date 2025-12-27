@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"zhatBot/internal/domain"
@@ -62,7 +63,8 @@ func (r *Router) Handle(ctx context.Context, msg domain.Message, out domain.Outg
 		if handled, err := r.tryCustom(ctx, cmdName, msg, out); handled {
 			return err
 		}
-		return out.SendMessage(ctx, msg.Platform, msg.ChannelID, "Este comando no está disponible aquí.")
+		log.Printf("router: comando %q no soportado en plataforma=%s canal=%s usuario=%s", cmdName, msg.Platform, msg.ChannelID, msg.Username)
+		return nil
 	}
 
 	ctxCmd := &Context{
@@ -79,7 +81,8 @@ func (r *Router) handleDynamic(ctx context.Context, trigger string, msg domain.M
 	if handled, err := r.tryCustom(ctx, trigger, msg, out); handled {
 		return err
 	}
-	return out.SendMessage(ctx, msg.Platform, msg.ChannelID, "Comando no encontrado")
+	log.Printf("router: comando no encontrado %q plataforma=%s canal=%s usuario=%s", trigger, msg.Platform, msg.ChannelID, msg.Username)
+	return nil
 }
 
 func (r *Router) tryCustom(ctx context.Context, trigger string, msg domain.Message, out domain.OutgoingMessagePort) (bool, error) {
