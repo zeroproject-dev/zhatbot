@@ -135,5 +135,6 @@ func mapChatMessageToDomain(cm irc.ChatMessage) domain.Message {
 		IsPlatformAdmin: sender.IsBroadcaster || sender.IsModerator,
 		IsPlatformMod:   sender.IsModerator,
 		IsPlatformVip:   sender.IsVIP,
+		IsSubscriber:    sender.IsSubscriber,
 	}
 }

@@ -62,10 +62,12 @@ func (c *ManageCustomCommand) Handle(ctx context.Context, cmdCtx *Context) error
 
 	var aliases []string
 	var platforms []domain.Platform
+	var permissions []domain.CommandAccessRole
 	var responseText string
 	var hasResponse bool
 	var hasAliases bool
 	var hasPlatforms bool
+	var hasPermissions bool
 	action := ""
 
 	for {
@@ -84,6 +86,11 @@ func (c *ManageCustomCommand) Handle(ctx context.Context, cmdCtx *Context) error
 		case strings.HasPrefix(lower, "platforms:"):
 			hasPlatforms = true
 			platforms = parsePlatforms(token[len("platforms:"):])
+			rest = remaining
+			continue
+		case strings.HasPrefix(lower, "permissions:"):
+			hasPermissions = true
+			permissions = parsePermissions(token[len("permissions:"):])
 			rest = remaining
 			continue
 		case strings.HasPrefix(lower, "action:"):
@@ -128,12 +135,14 @@ func (c *ManageCustomCommand) Handle(ctx context.Context, cmdCtx *Context) error
 	}
 
 	result, created, err := c.manager.Upsert(ctx, UpdateCustomCommandInput{
-		Name:         name,
-		Response:     responsePtr,
-		Aliases:      aliases,
-		HasAliases:   hasAliases,
-		Platforms:    platforms,
-		HasPlatforms: hasPlatforms,
+		Name:           name,
+		Response:       responsePtr,
+		Aliases:        aliases,
+		HasAliases:     hasAliases,
+		Platforms:      platforms,
+		HasPlatforms:   hasPlatforms,
+		Permissions:    permissions,
+		HasPermissions: hasPermissions,
 	})
 	if err != nil {
 		return cmdCtx.Out.SendMessage(ctx, cmdCtx.Message.Platform, cmdCtx.Message.ChannelID,
@@ -151,7 +160,7 @@ func (c *ManageCustomCommand) Handle(ctx context.Context, cmdCtx *Context) error
 
 func (c *ManageCustomCommand) usage(ctx context.Context, cmdCtx *Context) error {
 	return cmdCtx.Out.SendMessage(ctx, cmdCtx.Message.Platform, cmdCtx.Message.ChannelID,
-		"Uso: !command <nombre> [aliases:a,b] [platforms:twitch,kick] [action:delete] <respuesta>")
+		"Uso: !command <nombre> [aliases:a,b] [platforms:twitch,kick] [permissions:everyone,subscribers] [action:delete] <respuesta>")
 }
 
 func cutNext(input string) (token string, rest string) {
@@ -182,6 +191,14 @@ func parsePlatforms(raw string) []domain.Platform {
 	var out []domain.Platform
 	for _, part := range parseCSV(raw) {
 		out = append(out, domain.Platform(strings.ToLower(part)))
+	}
+	return out
+}
+
+func parsePermissions(raw string) []domain.CommandAccessRole {
+	var out []domain.CommandAccessRole
+	for _, part := range parseCSV(raw) {
+		out = append(out, domain.CommandAccessRole(strings.ToLower(part)))
 	}
 	return out
 }

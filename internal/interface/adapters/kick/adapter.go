@@ -207,7 +207,7 @@ func mapChatMessageToDomain(m kickchatwrapper.ChatMessage, broadcasterUserID int
 
 	isOwner := sender.ID == broadcasterUserID
 
-	var isMod, isVip bool
+	var isMod, isVip, isSubscriber bool
 	for _, b := range sender.Identity.Badges {
 		switch strings.ToLower(b.Type) {
 		case "moderator":
@@ -217,6 +217,8 @@ func mapChatMessageToDomain(m kickchatwrapper.ChatMessage, broadcasterUserID int
 		case "broadcaster":
 			// a veces Kick marca esto en badges también
 			isMod = true
+		case "subscriber":
+			isSubscriber = true
 		}
 	}
 
@@ -233,5 +235,6 @@ func mapChatMessageToDomain(m kickchatwrapper.ChatMessage, broadcasterUserID int
 		IsPlatformAdmin: isOwner || isMod,
 		IsPlatformMod:   isMod,
 		IsPlatformVip:   isVip,
+		IsSubscriber:    isSubscriber,
 	}
 }

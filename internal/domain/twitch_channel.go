@@ -15,4 +15,5 @@ type TwitchChannelService interface {
 	SearchCategories(ctx context.Context, query string) ([]CategoryOption, error)
 
 	GetStreamStatus(ctx context.Context, broadcasterID string) (StreamStatus, error)
+	IsFollower(ctx context.Context, broadcasterID, userID string) (bool, error)
 }

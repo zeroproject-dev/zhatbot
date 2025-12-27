@@ -175,3 +175,25 @@ func (s *TwitchStreamService) GetStreamStatus(ctx context.Context, broadcasterID
 
 	return status, nil
 }
+
+func (s *TwitchStreamService) IsFollower(ctx context.Context, broadcasterID, userID string) (bool, error) {
+	client := s.getClient()
+	broadcasterID = strings.TrimSpace(broadcasterID)
+	userID = strings.TrimSpace(userID)
+	if broadcasterID == "" || userID == "" {
+		return false, nil
+	}
+
+	resp, err := client.GetUsersFollows(&helix.UsersFollowsParams{
+		ToID:   broadcasterID,
+		FromID: userID,
+		First:  1,
+	})
+	if err != nil {
+		return false, fmt.Errorf("helix: GetUsersFollows: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("helix: GetUsersFollows failed (%d: %s) %s", resp.StatusCode, resp.Error, resp.ErrorMessage)
+	}
+	return resp.Data.Total > 0, nil
+}

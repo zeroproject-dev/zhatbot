@@ -72,11 +72,17 @@ CREATE TABLE IF NOT EXISTS custom_commands (
 	response TEXT NOT NULL,
 	aliases TEXT,
 	platforms TEXT,
+	permissions TEXT,
 	updated_at TIMESTAMP NOT NULL
 );`
 
 	if _, err := db.Exec(customCommandsTable); err != nil {
 		return fmt.Errorf("sqlite: migrate custom_commands: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE custom_commands ADD COLUMN permissions TEXT;`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return fmt.Errorf("sqlite: add permissions column: %w", err)
+		}
 	}
 
 	const settingsTable = `
@@ -283,12 +289,13 @@ func (s *CredentialStore) UpsertCustomCommand(ctx context.Context, cmd *domain.C
 	}
 
 	const stmt = `
-INSERT INTO custom_commands (name, response, aliases, platforms, updated_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO custom_commands (name, response, aliases, platforms, permissions, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(name) DO UPDATE SET
 	response=excluded.response,
 	aliases=excluded.aliases,
 	platforms=excluded.platforms,
+	permissions=excluded.permissions,
 	updated_at=excluded.updated_at;
 `
 
@@ -299,6 +306,7 @@ ON CONFLICT(name) DO UPDATE SET
 		cmd.Response,
 		encodeStringSlice(cmd.Aliases),
 		encodePlatforms(cmd.Platforms),
+		encodePermissions(cmd.Permissions),
 		cmd.UpdatedAt,
 	)
 	if err != nil {
@@ -310,7 +318,7 @@ ON CONFLICT(name) DO UPDATE SET
 
 func (s *CredentialStore) GetCustomCommand(ctx context.Context, name string) (*domain.CustomCommand, error) {
 	const query = `
-SELECT name, response, aliases, platforms, updated_at
+SELECT name, response, aliases, platforms, permissions, updated_at
 FROM custom_commands
 WHERE LOWER(name) = LOWER(?)
 LIMIT 1;
@@ -319,10 +327,10 @@ LIMIT 1;
 	row := s.db.QueryRowContext(ctx, query, name)
 
 	var record domain.CustomCommand
-	var aliasesRaw, platformsRaw sql.NullString
+	var aliasesRaw, platformsRaw, permissionsRaw sql.NullString
 	var updatedAt sql.NullTime
 
-	if err := row.Scan(&record.Name, &record.Response, &aliasesRaw, &platformsRaw, &updatedAt); err != nil {
+	if err := row.Scan(&record.Name, &record.Response, &aliasesRaw, &platformsRaw, &permissionsRaw, &updatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -331,6 +339,7 @@ LIMIT 1;
 
 	record.Aliases = decodeStringSlice(aliasesRaw.String)
 	record.Platforms = decodePlatforms(platformsRaw.String)
+	record.Permissions = decodePermissions(permissionsRaw.String)
 	record.UpdatedAt = updatedAt.Time
 
 	return &record, nil
@@ -338,7 +347,7 @@ LIMIT 1;
 
 func (s *CredentialStore) ListCustomCommands(ctx context.Context) ([]*domain.CustomCommand, error) {
 	const query = `
-SELECT name, response, aliases, platforms, updated_at
+SELECT name, response, aliases, platforms, permissions, updated_at
 FROM custom_commands;
 `
 
@@ -351,15 +360,16 @@ FROM custom_commands;
 	var cmds []*domain.CustomCommand
 	for rows.Next() {
 		var record domain.CustomCommand
-		var aliasesRaw, platformsRaw sql.NullString
+		var aliasesRaw, platformsRaw, permissionsRaw sql.NullString
 		var updatedAt sql.NullTime
 
-		if err := rows.Scan(&record.Name, &record.Response, &aliasesRaw, &platformsRaw, &updatedAt); err != nil {
+		if err := rows.Scan(&record.Name, &record.Response, &aliasesRaw, &platformsRaw, &permissionsRaw, &updatedAt); err != nil {
 			return nil, fmt.Errorf("sqlite: scan custom command: %w", err)
 		}
 
 		record.Aliases = decodeStringSlice(aliasesRaw.String)
 		record.Platforms = decodePlatforms(platformsRaw.String)
+		record.Permissions = decodePermissions(permissionsRaw.String)
 		record.UpdatedAt = updatedAt.Time
 
 		cmds = append(cmds, &record)
@@ -535,6 +545,47 @@ func decodePlatforms(raw string) []domain.Platform {
 			continue
 		}
 		out = append(out, domain.Platform(v))
+	}
+	return out
+}
+
+func encodePermissions(values []domain.CommandAccessRole) interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	clean := make([]string, 0, len(values))
+	for _, role := range values {
+		val := strings.TrimSpace(string(role))
+		if val == "" {
+			continue
+		}
+		clean = append(clean, val)
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
+func decodePermissions(raw string) []domain.CommandAccessRole {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil
+	}
+	var out []domain.CommandAccessRole
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		out = append(out, domain.CommandAccessRole(entry))
 	}
 	return out
 }

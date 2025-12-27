@@ -57,6 +57,11 @@ func main() {
 	eventLogger := notifications.NewEventLogger()
 	statusResolver := statususecase.NewResolver()
 
+	customManager, err := commands.NewCustomCommandManager(ctx, credStore)
+	if err != nil {
+		log.Fatalf("no pude iniciar el gestor de comandos: %v", err)
+	}
+
 	platformMgr := app.NewPlatformManager(app.ManagerConfig{
 		Context:  ctx,
 		Category: categorySvc,
@@ -128,6 +133,7 @@ func main() {
 		CredentialHook:   platformMgr.HandleCredentialUpdate,
 		CategoryManager:  categorySvc,
 		StatusResolver:   statusResolver,
+		CommandManager:   customManager,
 	}
 
 	if cfg.TwitchClientId != "" && cfg.TwitchClientSecret != "" && cfg.TwitchRedirectURI != "" {
@@ -149,11 +155,15 @@ func main() {
 		}
 	}
 
+	wsConfig.CommandManager = customManager
+
 	wsServer := ws.NewServer(wsConfig)
 
 	var twitchTitleSvc domain.StreamTitleService
+	var twitchAPIService domain.TwitchChannelService
+	var twitchBroadcasterID string
 	if cfg.TwitchClientId != "" && cfg.TwitchApiToken != "" {
-		twitchAPIService, err := twitchinfra.NewStreamService(cfg.TwitchClientId, cfg.TwitchApiToken)
+		service, err := twitchinfra.NewStreamService(cfg.TwitchClientId, cfg.TwitchApiToken)
 		if err != nil {
 			log.Printf("no se pudo iniciar el servicio de Twitch: %v", err)
 		} else {
@@ -161,6 +171,8 @@ func main() {
 			if err != nil {
 				log.Printf("no pude resolver el ID de Twitch: %v", err)
 			} else {
+				twitchAPIService = service
+				twitchBroadcasterID = broadcasterID
 				categorySvc.SetTwitchService(twitchAPIService, broadcasterID)
 				twitchTitleSvc = twitchinfra.NewTwitchTitleAdapter(twitchAPIService, broadcasterID)
 				statusResolver.Set(domain.PlatformTwitch, twitchinfra.NewTwitchStatusAdapter(twitchAPIService, broadcasterID))
@@ -170,11 +182,9 @@ func main() {
 
 	if twitchTitleSvc != nil {
 		resolver.Set(domain.PlatformTwitch, twitchTitleSvc)
-	}
-
-	customManager, err := commands.NewCustomCommandManager(ctx, credStore)
-	if err != nil {
-		log.Fatalf("no pude iniciar el gestor de comandos: %v", err)
+		if twitchAPIService != nil && twitchBroadcasterID != "" {
+			customManager.SetAudienceResolver(commands.NewTwitchAudienceResolver(twitchAPIService, twitchBroadcasterID))
+		}
 	}
 
 	router := commands.NewRouter("!")

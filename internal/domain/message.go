@@ -21,4 +21,5 @@ type Message struct {
 	IsPlatformAdmin bool
 	IsPlatformMod   bool
 	IsPlatformVip   bool
+	IsSubscriber    bool
 }

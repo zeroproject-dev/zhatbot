@@ -20,6 +20,7 @@ import (
 	kicksdk "github.com/glichtv/kick-sdk"
 
 	"zhatBot/internal/domain"
+	commandsusecase "zhatBot/internal/usecase/commands"
 	statususecase "zhatBot/internal/usecase/status"
 	ttsusecase "zhatBot/internal/usecase/tts"
 )
@@ -39,6 +40,7 @@ type Config struct {
 	CategoryManager  CategoryManager
 	TTSManager       TTSManager
 	StatusResolver   *statususecase.Resolver
+	CommandManager   *commandsusecase.CustomCommandManager
 }
 
 type CategoryManager interface {
@@ -148,6 +150,7 @@ type apiHandlers struct {
 	category  CategoryManager
 	tts       TTSManager
 	status    *statususecase.Resolver
+	commands  *commandsusecase.CustomCommandManager
 	hook      CredentialHook
 }
 
@@ -176,6 +179,7 @@ func newAPIHandlers(cfg Config) *apiHandlers {
 		category:  cfg.CategoryManager,
 		tts:       cfg.TTSManager,
 		status:    cfg.StatusResolver,
+		commands:  cfg.CommandManager,
 		hook:      cfg.CredentialHook,
 	}
 }
@@ -200,6 +204,9 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 	}
 	if a.status != nil {
 		mux.HandleFunc("/api/streams/status", a.withCORS(a.handleStreamStatus))
+	}
+	if a.commands != nil {
+		mux.HandleFunc("/api/commands", a.withCORS(a.handleCommands))
 	}
 
 	if a.twitchCfg != nil && a.twitchCfg.enabled() {
@@ -234,7 +241,7 @@ func (a *apiHandlers) withCORS(next http.HandlerFunc) http.HandlerFunc {
 func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
 }
 
 type oauthStartRequest struct {
@@ -556,6 +563,73 @@ func (a *apiHandlers) handleStreamStatus(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *apiHandlers) handleCommands(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.commands == nil {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		a.handleCommandsList(w, r)
+	case http.MethodPost:
+		a.handleCommandsSave(w, r)
+	case http.MethodDelete:
+		a.handleCommandsDelete(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *apiHandlers) handleCommandsList(w http.ResponseWriter, r *http.Request) {
+	customCommands := a.commands.List()
+	out := builtinCommandResponses()
+	for _, cmd := range customCommands {
+		out = append(out, toCommandResponse(cmd))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *apiHandlers) handleCommandsSave(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var payload commandRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+	input := UpdateCustomCommandInputFromRequest(payload)
+	result, _, err := a.commands.Upsert(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toCommandResponse(result))
+}
+
+func (a *apiHandlers) handleCommandsDelete(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		var payload struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		name = strings.TrimSpace(payload.Name)
+	}
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing name")
+		return
+	}
+	deleted, err := a.commands.Delete(r.Context(), name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, "command not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) {
@@ -977,6 +1051,32 @@ type streamStatusResponse struct {
 	StartedAt   string `json:"started_at,omitempty"`
 }
 
+const (
+	commandSourceBuiltin = "builtin"
+	commandSourceCustom  = "custom"
+)
+
+type commandRequest struct {
+	Name        string    `json:"name"`
+	Response    *string   `json:"response"`
+	Aliases     *[]string `json:"aliases"`
+	Platforms   *[]string `json:"platforms"`
+	Permissions *[]string `json:"permissions"`
+}
+
+type commandResponse struct {
+	Name        string                     `json:"name"`
+	Response    string                     `json:"response"`
+	Aliases     []string                   `json:"aliases"`
+	Platforms   []string                   `json:"platforms"`
+	Permissions []domain.CommandAccessRole `json:"permissions"`
+	UpdatedAt   string                     `json:"updated_at"`
+	Source      string                     `json:"source"`
+	Editable    bool                       `json:"editable"`
+	Description string                     `json:"description,omitempty"`
+	Usage       string                     `json:"usage,omitempty"`
+}
+
 func toNotificationResponse(item *domain.Notification) notificationResponse {
 	if item == nil {
 		return notificationResponse{}
@@ -1031,6 +1131,91 @@ func formatTime(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339)
+}
+
+func builtinCommandResponses() []commandResponse {
+	catalog := commandsusecase.BuiltinCommandCatalog()
+	out := make([]commandResponse, 0, len(catalog))
+	for _, item := range catalog {
+		platforms := make([]string, 0, len(item.Platforms))
+		for _, p := range item.Platforms {
+			if p == "" {
+				continue
+			}
+			platforms = append(platforms, string(p))
+		}
+		out = append(out, commandResponse{
+			Name:        item.Name,
+			Aliases:     append([]string(nil), item.Aliases...),
+			Platforms:   platforms,
+			Permissions: append([]domain.CommandAccessRole(nil), item.Permissions...),
+			Source:      commandSourceBuiltin,
+			Editable:    false,
+			Description: item.Description,
+			Usage:       item.Usage,
+		})
+	}
+	return out
+}
+
+func toCommandResponse(cmd *domain.CustomCommand) commandResponse {
+	if cmd == nil {
+		return commandResponse{}
+	}
+	platforms := make([]string, 0, len(cmd.Platforms))
+	for _, p := range cmd.Platforms {
+		if p == "" {
+			continue
+		}
+		platforms = append(platforms, string(p))
+	}
+	updated := ""
+	if !cmd.UpdatedAt.IsZero() {
+		updated = cmd.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return commandResponse{
+		Name:        cmd.Name,
+		Response:    cmd.Response,
+		Aliases:     append([]string(nil), cmd.Aliases...),
+		Platforms:   platforms,
+		Permissions: append([]domain.CommandAccessRole(nil), cmd.Permissions...),
+		UpdatedAt:   updated,
+		Source:      commandSourceCustom,
+		Editable:    true,
+	}
+}
+
+func UpdateCustomCommandInputFromRequest(req commandRequest) commandsusecase.UpdateCustomCommandInput {
+	input := commandsusecase.UpdateCustomCommandInput{
+		Name: req.Name,
+	}
+	if req.Response != nil {
+		trimmed := strings.TrimSpace(*req.Response)
+		input.Response = &trimmed
+	}
+	if req.Aliases != nil {
+		input.HasAliases = true
+		input.Aliases = append([]string(nil), *req.Aliases...)
+	}
+	if req.Platforms != nil {
+		input.HasPlatforms = true
+		for _, item := range *req.Platforms {
+			val := domain.Platform(strings.ToLower(strings.TrimSpace(item)))
+			if val != "" {
+				input.Platforms = append(input.Platforms, val)
+			}
+		}
+	}
+	if req.Permissions != nil {
+		input.HasPermissions = true
+		for _, item := range *req.Permissions {
+			val := strings.ToLower(strings.TrimSpace(item))
+			if val != "" {
+				input.Permissions = append(input.Permissions, domain.CommandAccessRole(val))
+			}
+		}
+	}
+	return input
 }
 
 func parsePlatformParam(p string) domain.Platform {

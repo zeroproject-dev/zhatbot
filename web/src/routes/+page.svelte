@@ -3,14 +3,16 @@
 	import AuthActions from '$lib/components/AuthActions.svelte';
 	import StreamInfoPanel from '$lib/components/StreamInfoPanel.svelte';
 	import GiveawayPanel from '$lib/components/GiveawayPanel.svelte';
+	import CommandsPanel from '$lib/components/CommandsPanel.svelte';
 	import NotificationPanel from '$lib/components/NotificationPanel.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 
-	type TabId = 'stream' | 'giveaway';
+	type TabId = 'stream' | 'giveaway' | 'commands';
 
 	const tabs: Array<{ id: TabId; label: string }> = [
 		{ id: 'stream', label: m.dashboard_tab_stream() },
-		{ id: 'giveaway', label: m.dashboard_tab_giveaway() }
+		{ id: 'giveaway', label: m.dashboard_tab_giveaway() },
+		{ id: 'commands', label: m.dashboard_tab_commands() }
 	];
 
 	let activeTab: TabId = 'stream';
@@ -54,7 +56,7 @@
 				</div>
 			</section>
 		</div>
-	{:else}
+	{:else if activeTab === 'giveaway'}
 		<div class="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
 			<section class="flex flex-1">
 				<ChatPanel />
@@ -64,6 +66,12 @@
 					<NotificationPanel />
 					<GiveawayPanel />
 				</div>
+			</section>
+		</div>
+	{:else}
+		<div class="flex flex-col gap-6">
+			<section class="flex flex-1">
+				<CommandsPanel />
 			</section>
 		</div>
 	{/if}
