@@ -4,6 +4,7 @@
 	import { getLocale } from '$lib/paraglide/runtime';
 	import { m } from '$lib/paraglide/messages.js';
 	import { fetchCommands, saveCommand, deleteCommand } from '$lib/services/commands';
+	import { isWails, onCommandsChanged } from '$lib/wails/adapter';
 	import type { CommandAccessRole, CommandRecord } from '$lib/types/command';
 
 	let commands = $state<CommandRecord[]>([]);
@@ -38,9 +39,20 @@ const canEditSelection = $derived(!isBuiltinSelection && editingIsEditable);
 
 	const platformOptions = ['twitch', 'kick'];
 
-	onMount(() => {
-		void loadCommands();
-	});
+onMount(() => {
+	void loadCommands();
+	let unsubscribe: (() => void) | undefined;
+	if (browser && isWails()) {
+		onCommandsChanged(() => {
+			void loadCommands();
+		}).then((off) => {
+			unsubscribe = off;
+		});
+	}
+	return () => {
+		unsubscribe?.();
+	};
+});
 
 	const sortCommands = (items: CommandRecord[]) =>
 		[...items].sort((a, b) => {

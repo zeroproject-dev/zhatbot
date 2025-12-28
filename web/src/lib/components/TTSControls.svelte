@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { fetchTTSStatus, updateTTSSettings, type TTSStatus } from '$lib/services/tts';
+	import { isWails, onTTSStatus, ttsGetRunnerStatus } from '$lib/wails/adapter';
 	import { ttsVolume } from '$lib/stores/tts';
 
 	const volume = $derived($ttsVolume as number);
@@ -10,6 +11,8 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let saving = $state(false);
+	let runnerStatus = $state<{ state: string; queue: number; current?: string; lastError?: string } | null>(null);
+	let runnerError = $state<string | null>(null);
 
 	const loadStatus = async () => {
 		loading = true;
@@ -54,8 +57,41 @@
 		ttsVolume.set(value);
 	};
 
+	const loadRunnerStatus = async () => {
+		if (!isWails()) return;
+		try {
+			const payload = (await ttsGetRunnerStatus()) as Record<string, unknown>;
+			runnerStatus = normalizeRunnerStatus(payload);
+		} catch (err) {
+			console.error('tts runner status failed', err);
+			runnerError = m.tts_controls_error_status();
+		}
+	};
+
+	const normalizeRunnerStatus = (payload: Record<string, unknown> | null) => {
+		if (!payload) return null;
+		return {
+			state: String(payload.state ?? payload.State ?? 'idle'),
+			queue: Number(payload.queue_length ?? payload.QueueLength ?? 0),
+			current: (payload.current_id ?? payload.CurrentID ?? '') as string,
+			lastError: (payload.last_error ?? payload.LastError ?? '') as string
+		};
+	};
+
 	onMount(() => {
 		void loadStatus();
+		let unsubscribe: (() => void) | undefined;
+		if (isWails()) {
+			void loadRunnerStatus();
+			onTTSStatus((payload) => {
+				runnerStatus = normalizeRunnerStatus(payload as Record<string, unknown>);
+			}).then((off) => {
+				unsubscribe = off;
+			});
+		}
+		return () => {
+			unsubscribe?.();
+		};
 	});
 </script>
 
@@ -87,6 +123,18 @@
 				<div class="peer absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition peer-checked:translate-x-4"></div>
 			</label>
 		</div>
+
+		{#if runnerStatus}
+			<p class="text-[11px] text-slate-500 dark:text-slate-400">
+				Desktop: {runnerStatus.state} · {runnerStatus.queue}
+				{runnerStatus.queue === 1 ? 'item' : 'items'}
+				{#if runnerStatus.lastError}
+					<span class="text-rose-400"> — {runnerStatus.lastError}</span>
+				{/if}
+			</p>
+		{:else if runnerError}
+			<p class="text-[11px] text-rose-400">{runnerError}</p>
+		{/if}
 
 		<div>
 			<label for="tts-voice" class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{m.tts_controls_voice_label()}</label>

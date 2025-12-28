@@ -3,7 +3,6 @@ package tts
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,17 +20,38 @@ type VoiceOption struct {
 	Label string
 }
 
-type Service struct {
-	repo      domain.TTSSettingsRepository
-	publisher domain.TTSEventPublisher
-	voices    []VoiceOption
-	httpCli   *http.Client
+type Request struct {
+	ID          string
+	Text        string
+	VoiceCode   string
+	VoiceLabel  string
+	RequestedBy string
+	Platform    domain.Platform
+	ChannelID   string
+	Metadata    map[string]string
+	CreatedAt   time.Time
 }
 
-func NewService(repo domain.TTSSettingsRepository, publisher domain.TTSEventPublisher, _ string) *Service {
+type Queue interface {
+	Enqueue(ctx context.Context, req Request) (string, error)
+}
+
+type StatusSnapshot struct {
+	Enabled bool
+	Voice   VoiceOption
+	Voices  []VoiceOption
+}
+
+type Service struct {
+	repo    domain.TTSSettingsRepository
+	queue   Queue
+	voices  []VoiceOption
+	httpCli *http.Client
+}
+
+func NewService(repo domain.TTSSettingsRepository, _ string) *Service {
 	return &Service{
-		repo:      repo,
-		publisher: publisher,
+		repo: repo,
 		voices: []VoiceOption{
 			{Code: voices.Spanish, Label: "Español"},
 			{Code: "es-es", Label: "Español España"},
@@ -77,34 +97,15 @@ func (s *Service) CurrentVoice(ctx context.Context) VoiceOption {
 }
 
 func (s *Service) RequestSpeech(ctx context.Context, text, requestedBy string, platform domain.Platform, channelID string) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return fmt.Errorf("texto vacío")
-	}
-	if !s.isEnabled(ctx) {
-		return fmt.Errorf("el TTS está desactivado")
-	}
-	if s.publisher == nil {
-		return fmt.Errorf("tts publisher no disponible")
-	}
-	voice := s.CurrentVoice(ctx)
-	audio, err := s.generateAudio(text, voice.Code)
-	if err != nil {
-		return fmt.Errorf("tts: %w", err)
-	}
-
-	event := domain.TTSEvent{
-		Voice:       voice.Code,
-		VoiceLabel:  voice.Label,
+	req := Request{
 		Text:        text,
 		RequestedBy: requestedBy,
 		Platform:    platform,
 		ChannelID:   channelID,
-		Timestamp:   time.Now(),
-		AudioBase64: base64.StdEncoding.EncodeToString(audio),
+		CreatedAt:   time.Now(),
 	}
-
-	return s.publisher.PublishTTSEvent(ctx, event)
+	_, err := s.Enqueue(ctx, req)
+	return err
 }
 
 func (s *Service) findVoice(code string) (VoiceOption, bool) {
@@ -204,4 +205,67 @@ func (s *Service) SetEnabled(ctx context.Context, enabled bool) error {
 
 func (s *Service) Enabled(ctx context.Context) bool {
 	return s.isEnabled(ctx)
+}
+
+func (s *Service) SetQueue(queue Queue) {
+	s.queue = queue
+}
+
+func (s *Service) Enqueue(ctx context.Context, req Request) (string, error) {
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		return "", fmt.Errorf("texto vacío")
+	}
+	if !s.isEnabled(ctx) {
+		return "", fmt.Errorf("el TTS está desactivado")
+	}
+	if s.queue == nil {
+		return "", fmt.Errorf("tts queue no disponible")
+	}
+
+	voice := s.CurrentVoice(ctx)
+	if strings.TrimSpace(req.VoiceCode) != "" {
+		if option, ok := s.findVoice(req.VoiceCode); ok {
+			voice = option
+		} else {
+			return "", fmt.Errorf("voz no soportada")
+		}
+	}
+
+	req.Text = text
+	req.VoiceCode = voice.Code
+	req.VoiceLabel = voice.Label
+	if req.CreatedAt.IsZero() {
+		req.CreatedAt = time.Now()
+	}
+
+	return s.queue.Enqueue(ctx, req)
+}
+
+func (s *Service) GenerateAudio(ctx context.Context, text, voiceCode string) ([]byte, VoiceOption, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, VoiceOption{}, fmt.Errorf("texto vacío")
+	}
+	voice := s.CurrentVoice(ctx)
+	if strings.TrimSpace(voiceCode) != "" {
+		if option, ok := s.findVoice(voiceCode); ok {
+			voice = option
+		} else {
+			return nil, VoiceOption{}, fmt.Errorf("voz no soportada")
+		}
+	}
+	audio, err := s.generateAudio(text, voice.Code)
+	if err != nil {
+		return nil, VoiceOption{}, err
+	}
+	return audio, voice, nil
+}
+
+func (s *Service) Snapshot(ctx context.Context) StatusSnapshot {
+	return StatusSnapshot{
+		Enabled: s.Enabled(ctx),
+		Voice:   s.CurrentVoice(ctx),
+		Voices:  s.ListVoices(),
+	}
 }

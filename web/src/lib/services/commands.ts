@@ -1,8 +1,12 @@
 import type { CommandPayload, CommandRecord } from '$lib/types/command';
+import { isWails, callWailsBinding } from '$lib/wails/adapter';
 
 const BASE_URL = '/api/commands';
 
 export const fetchCommands = async (): Promise<CommandRecord[]> => {
+	if (isWails()) {
+		return await callWailsBinding<CommandRecord[]>('ListCommands');
+	}
 	const response = await fetch(BASE_URL, {
 		headers: {
 			Accept: 'application/json'
@@ -17,6 +21,9 @@ export const fetchCommands = async (): Promise<CommandRecord[]> => {
 };
 
 export const saveCommand = async (payload: CommandPayload): Promise<CommandRecord> => {
+	if (isWails()) {
+		return await callWailsBinding<CommandRecord>('UpsertCommand', payload);
+	}
 	const response = await fetch(BASE_URL, {
 		method: 'POST',
 		headers: {
@@ -35,6 +42,10 @@ export const saveCommand = async (payload: CommandPayload): Promise<CommandRecor
 };
 
 export const deleteCommand = async (name: string): Promise<void> => {
+	if (isWails()) {
+		await callWailsBinding<void>('DeleteCommand', name);
+		return;
+	}
 	const params = new URLSearchParams();
 	params.set('name', name);
 	const response = await fetch(`${BASE_URL}?${params.toString()}`, {

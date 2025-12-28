@@ -1,3 +1,5 @@
+import { isWails, callWailsBinding } from '$lib/wails/adapter';
+
 export type StreamStatusRecord = {
 	platform: string;
 	is_live: boolean;
@@ -9,6 +11,9 @@ export type StreamStatusRecord = {
 };
 
 export const fetchStreamStatuses = async (): Promise<StreamStatusRecord[]> => {
+	if (isWails()) {
+		return await callWailsBinding<StreamStatusRecord[]>('StreamStatus_List');
+	}
 	const response = await fetch('/api/streams/status', {
 		headers: {
 			Accept: 'application/json'

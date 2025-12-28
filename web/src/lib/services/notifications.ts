@@ -1,3 +1,4 @@
+import { isWails, callWailsBinding } from '$lib/wails/adapter';
 import type {
 	CreateNotificationPayload,
 	NotificationRecord
@@ -6,6 +7,9 @@ import type {
 const BASE_URL = '/api/notifications';
 
 export const fetchNotifications = async (limit = 50): Promise<NotificationRecord[]> => {
+	if (isWails()) {
+		return await callWailsBinding<NotificationRecord[]>('Notifications_List', limit);
+	}
 	const params = new URLSearchParams();
 	if (limit > 0) {
 		params.set('limit', String(limit));

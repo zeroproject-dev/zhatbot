@@ -234,6 +234,13 @@ func (s *Server) SetTTSManager(m TTSManager) {
 	s.api.setTTSManager(m)
 }
 
+func (s *Server) SetTTSStatusProvider(p TTSStatusReporter) {
+	if s == nil || s.api == nil {
+		return
+	}
+	s.api.setTTSStatusProvider(p)
+}
+
 type incomingPayload struct {
 	Text      string `json:"text"`
 	Platform  string `json:"platform"`

@@ -1,3 +1,8 @@
+web/src/lib/wailsjs/
+.gocache/
+data
+desktop/appassets/**
+web/.bun
+desktop/build
+desktop/zhatbot.log
 .env
-data/
-.cache/

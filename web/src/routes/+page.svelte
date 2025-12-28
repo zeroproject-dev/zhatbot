@@ -5,6 +5,7 @@
 	import GiveawayPanel from '$lib/components/GiveawayPanel.svelte';
 	import CommandsPanel from '$lib/components/CommandsPanel.svelte';
 	import NotificationPanel from '$lib/components/NotificationPanel.svelte';
+	import { useWailsAdapter } from '$lib/wails/adapter';
 	import { m } from '$lib/paraglide/messages.js';
 
 	type TabId = 'stream' | 'giveaway' | 'commands';
@@ -16,6 +17,8 @@
 	];
 
 	let activeTab: TabId = 'stream';
+
+	useWailsAdapter();
 </script>
 
 <div class="flex flex-col gap-6">
