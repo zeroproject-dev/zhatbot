@@ -3,11 +3,21 @@ import { onMount } from 'svelte';
 type Unsubscribe = () => void;
 const noop: Unsubscribe = () => undefined;
 
+declare global {
+	interface Window {
+		runtime?: {
+			EventsOn?: (topic: string, cb: (payload: unknown) => void) => Unsubscribe | void;
+		};
+		go?: Record<string, any>;
+	}
+}
+
 const isBrowser = () => typeof window !== 'undefined';
 
 export const isWails = () => isBrowser() && typeof window.runtime !== 'undefined';
 
-const getBridge = () => (window.go as any)?.main?.App;
+const getBridge = () => window.go?.main?.App;
+const runtimeMode = import.meta.env.VITE_ZHATBOT_MODE ?? 'production';
 
 const subscribeToEvent = async (topic: string, callback: (payload: unknown) => void) => {
 	if (!isWails() || !topic) {
@@ -72,6 +82,53 @@ export const ttsStopAll = () => callWailsBinding('TTS_StopAll');
 export const ttsGetSettings = () => callWailsBinding('TTS_GetSettings');
 export const ttsUpdateSettings = (payload: { voice?: string; enabled?: boolean }) =>
 	callWailsBinding('TTS_UpdateSettings', payload);
+
+export const oauthStart = (platform: string, role: string) =>
+	callWailsBinding<void>('OAuth_Start', platform, role);
+export const oauthStatus = () => callWailsBinding<Record<string, any>>('OAuth_Status');
+export const oauthLogout = (platform: string, role: string) =>
+	callWailsBinding<void>('OAuth_Logout', platform, role);
+export const configSetTwitchSecret = (secret: string) =>
+	callWailsBinding<void>('Config_SetTwitchSecret', secret);
+
+export const onOAuthComplete = (callback: (payload: unknown) => void) =>
+	subscribeToEvent('oauth:complete', callback);
+
+export const onOAuthStatusEvent = (callback: (payload: unknown) => void) =>
+	subscribeToEvent('oauth:status', callback);
+export const onOAuthMissingSecret = (callback: (payload: unknown) => void) =>
+	subscribeToEvent('oauth:missing-secret', callback);
+
+const setupDesktopNetworkGuards = () => {
+	if (!isBrowser()) return;
+	const guardKey = '__ZHATBOT_NET_GUARD__';
+	if ((window as any)[guardKey]) {
+		return;
+	}
+	const originalFetch = window.fetch.bind(window);
+	window.fetch = ((...args: Parameters<typeof window.fetch>) => {
+		if (isWails()) {
+			console.error('[wails] fetch() invocado en modo desktop. Usa bindings/events.', args[0]);
+		}
+		return originalFetch(...args);
+	}) as typeof window.fetch;
+
+	const NativeWebSocket = window.WebSocket;
+	(window as any).WebSocket = class GuardedWebSocket extends NativeWebSocket {
+		constructor(url: string | URL, protocols?: string | string[]) {
+			if (isWails()) {
+				console.error('[wails] WebSocket constructor invocado en modo desktop.', url);
+			}
+			super(url, protocols as any);
+		}
+	} as typeof WebSocket;
+
+	(window as any)[guardKey] = true;
+};
+
+if (runtimeMode === 'development') {
+	setupDesktopNetworkGuards();
+}
 
 export const useWailsAdapter = () => {
 	onMount(() => {

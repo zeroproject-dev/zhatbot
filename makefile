@@ -14,6 +14,8 @@ WIN_CC     := x86_64-w64-mingw32-gcc
 BUN_INSTALL := $(PWD)/$(WEB_DIR)/.bun
 BUN_TMPDIR := $(PWD)/$(WEB_DIR)/.bun-tmp
 
+export ZHATBOT_MODE ?= production
+
 # =====================================================
 # Help
 # =====================================================
@@ -43,6 +45,7 @@ web-build:
 	cd $(WEB_DIR) && \
 	BUN_INSTALL=$(BUN_INSTALL) \
 	BUN_TMPDIR=$(BUN_TMPDIR) \
+	VITE_ZHATBOT_MODE=$(ZHATBOT_MODE) \
 	bun run build
 
 # =====================================================
@@ -64,6 +67,7 @@ desktop-assets: web-build
 # =====================================================
 
 .PHONY: win-build
+win-build: export ZHATBOT_MODE=production
 win-build: desktop-assets
 	@echo "==> Building Windows portable EXE"
 	cd $(DESKTOP_DIR) && \
@@ -75,6 +79,7 @@ win-build: desktop-assets
 		-o $(APP_NAME).exe
 
 .PHONY: win-build-dev
+win-build-dev: export ZHATBOT_MODE=development
 win-build-dev: desktop-assets
 	@echo "==> Building Windows EXE (DevTools ENABLED)"
 	cd $(DESKTOP_DIR) && \
@@ -88,6 +93,7 @@ win-build-dev: desktop-assets
 		-o $(APP_NAME)-dev.exe
 
 .PHONY: win-build-dev-legacy
+win-build-dev-legacy: export ZHATBOT_MODE=development
 win-build-dev-legacy: desktop-assets
 	@echo "==> Building Windows EXE (DevTools + legacy WebView2 loader)"
 	cd $(DESKTOP_DIR) && \

@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '$lib/config';
+import { isWails, callWailsBinding } from '$lib/wails/adapter';
 
 export type CategoryOption = {
 	ID: string;
@@ -13,6 +14,9 @@ export const searchCategories = async (
 	platform: Platform,
 	query: string
 ): Promise<CategoryOption[]> => {
+	if (isWails()) {
+		return await callWailsBinding<CategoryOption[]>('Category_Search', platform, query);
+	}
 	const url = new URL('/api/categories/search', baseUrl);
 	url.searchParams.set('platform', platform);
 	url.searchParams.set('query', query);
@@ -27,6 +31,10 @@ export const searchCategories = async (
 };
 
 export const updateCategory = async (platform: Platform, name: string): Promise<void> => {
+	if (isWails()) {
+		await callWailsBinding('Category_Update', platform, name);
+		return;
+	}
 	const response = await fetch(`${baseUrl}/api/categories/update`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },

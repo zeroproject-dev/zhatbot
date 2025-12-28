@@ -56,6 +56,15 @@ type Runtime struct {
 	status     *statususecase.Resolver
 	category   *categoryusecase.Service
 	dispatcher func(context.Context, domain.Message) error
+
+	twitchMu            sync.RWMutex
+	twitchCancel        context.CancelFunc
+	twitchDone          chan struct{}
+	twitchBotLogin      string
+	twitchBotToken      string
+	twitchChannels      []string
+	twitchStreamerLogin string
+	twitchNoticeHandler twitchadapter.UserNoticeHandler
 }
 
 func Start(ctx context.Context, _ Options) (*Runtime, error) {
@@ -136,7 +145,7 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 			RedirectURI:  cfg.KickRedirectURI,
 		},
 	)
-	refresher.RegisterHook(platformMgr.HandleCredentialUpdate)
+	refresher.RegisterHook(run.handleCredentialUpdate)
 	run.refresher = refresher
 
 	if err := refresher.RefreshAll(runtimeCtx); err != nil {
@@ -154,6 +163,7 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 		Channels:          cfg.TwitchChannels,
 		UserNoticeHandler: eventLogger.HandleTwitchUserNotice,
 	}
+	run.initTwitchState(twitchCfg)
 
 	wsAddr := os.Getenv("CHAT_WS_ADDR")
 	if wsAddr == "" {
@@ -164,7 +174,7 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 		Addr:             wsAddr,
 		CredentialRepo:   credStore,
 		NotificationRepo: credStore,
-		CredentialHook:   platformMgr.HandleCredentialUpdate,
+		CredentialHook:   run.handleCredentialUpdate,
 		CategoryManager:  categorySvc,
 		StatusResolver:   statusResolver,
 		CommandManager:   customManager,
@@ -241,15 +251,6 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 
 	router.Register(commands.NewTitleCommand(resolver))
 
-	var twitchAd *twitchadapter.Adapter
-	if twitchCfg.Username == "" || twitchCfg.OAuthToken == "" {
-		log.Println("twitch: adaptador deshabilitado hasta que completes el login del bot.")
-	} else {
-		twitchAd = twitchadapter.NewAdapter(twitchCfg)
-		multiOut.Register(domain.PlatformTwitch, twitchAd)
-	}
-	run.twitchAd = twitchAd
-
 	uc := handle_message.NewInteractor(multiOut, router)
 
 	dispatch := func(ctx context.Context, msg domain.Message) error {
@@ -258,9 +259,7 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 		if msgNormalized.ChannelID == "" {
 			switch msgNormalized.Platform {
 			case domain.PlatformTwitch:
-				if len(twitchCfg.Channels) > 0 {
-					msgNormalized.ChannelID = twitchCfg.Channels[0]
-				}
+				msgNormalized.ChannelID = run.defaultTwitchChannel()
 			case domain.PlatformKick:
 				msgNormalized.ChannelID = platformMgr.ChannelID(domain.PlatformKick)
 			}
@@ -284,10 +283,7 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 
 	wsServer.SetHandler(dispatch)
 	platformMgr.SetHandler(dispatch)
-	if twitchAd != nil {
-		twitchAd.SetHandler(dispatch)
-	}
-
+	run.syncTwitchAdapter()
 	run.wg.Add(1)
 	go func() {
 		defer run.wg.Done()
@@ -297,17 +293,7 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 		}
 	}()
 
-	if twitchAd != nil {
-		run.wg.Add(1)
-		go func() {
-			defer run.wg.Done()
-			if err := twitchAd.Start(runtimeCtx); err != nil && err != context.Canceled {
-				log.Printf("twitch adapter error: %v", err)
-			}
-		}()
-	}
-
-	handleCredentialSnapshot(runtimeCtx, platformMgr, credStore)
+	run.handleCredentialSnapshot(runtimeCtx)
 
 	if ttsRunner != nil {
 		ttsRunner.Start(runtimeCtx)
@@ -323,6 +309,7 @@ func (r *Runtime) Stop() error {
 		return nil
 	}
 	r.cancel()
+	r.stopTwitchAdapter()
 	r.platform.Shutdown()
 	if r.ttsRunner != nil {
 		_ = r.ttsRunner.Close()
@@ -379,12 +366,86 @@ func (r *Runtime) StreamStatusResolver() *statususecase.Resolver {
 	return r.status
 }
 
+func (r *Runtime) CategoryService() *categoryusecase.Service {
+	if r == nil {
+		return nil
+	}
+	return r.category
+}
+
+func (r *Runtime) DispatchMessage(ctx context.Context, msg domain.Message) error {
+	if r == nil || r.dispatcher == nil {
+		return fmt.Errorf("dispatcher unavailable")
+	}
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	return r.dispatcher(ctx, msg)
+}
+
+func (r *Runtime) Config() *config.Config {
+	if r == nil {
+		return nil
+	}
+	return r.cfg
+}
+
+func (r *Runtime) CredentialRepo() domain.CredentialRepository {
+	if r == nil {
+		return nil
+	}
+	return r.credStore
+}
+
+func (r *Runtime) NotifyCredentialUpdate(ctx context.Context, cred *domain.Credential) {
+	r.handleCredentialUpdate(ctx, cred)
+}
+
+func (r *Runtime) OAuthStart(ctx context.Context, platform domain.Platform, role string) (string, error) {
+	if r == nil || r.wsServer == nil {
+		return "", fmt.Errorf("oauth server unavailable")
+	}
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	return r.wsServer.OAuthStart(ctx, platform, role)
+}
+
+func (r *Runtime) OAuthStatus(ctx context.Context) (ws.OAuthStatus, error) {
+	if r == nil || r.wsServer == nil {
+		return ws.OAuthStatus{}, fmt.Errorf("oauth server unavailable")
+	}
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	return r.wsServer.OAuthStatus(ctx)
+}
+
+func (r *Runtime) OAuthLogout(ctx context.Context, platform domain.Platform, role string) error {
+	if r == nil || r.wsServer == nil {
+		return fmt.Errorf("oauth server unavailable")
+	}
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	return r.wsServer.OAuthLogout(ctx, platform, role)
+}
+
 func loadInitialTokens(ctx context.Context, store *sqlitestorage.CredentialStore, cfg *config.Config) {
 	if store == nil {
 		return
 	}
-	if cred, err := store.Get(ctx, domain.PlatformTwitch, "bot"); err == nil && cred != nil && cred.AccessToken != "" {
-		cfg.TwitchToken = cred.AccessToken
+	if cred, err := store.Get(ctx, domain.PlatformTwitch, "bot"); err == nil && cred != nil {
+		if cred.AccessToken != "" {
+			cfg.TwitchToken = cred.AccessToken
+		}
+		if login := strings.TrimSpace(cred.Metadata["login"]); login != "" {
+			cfg.TwitchUsername = login
+			if len(cfg.TwitchChannels) == 0 {
+				cfg.TwitchChannels = []string{ensureTwitchChannel(login)}
+			}
+		}
+		log.Printf("twitch: bot credential present=%v user=%s", cred.AccessToken != "", cfg.TwitchUsername)
 	} else if err != nil {
 		log.Printf("error obteniendo token de Twitch bot desde DB: %v", err)
 	}
@@ -401,11 +462,11 @@ func loadInitialTokens(ctx context.Context, store *sqlitestorage.CredentialStore
 	}
 }
 
-func handleCredentialSnapshot(ctx context.Context, mgr *app.PlatformManager, repo domain.CredentialRepository) {
-	if mgr == nil || repo == nil {
+func (r *Runtime) handleCredentialSnapshot(ctx context.Context) {
+	if r == nil || r.credStore == nil {
 		return
 	}
-	creds, err := repo.List(ctx)
+	creds, err := r.credStore.List(ctx)
 	if err != nil {
 		log.Printf("snapshot credentials error: %v", err)
 		return
@@ -414,7 +475,7 @@ func handleCredentialSnapshot(ctx context.Context, mgr *app.PlatformManager, rep
 		if cred == nil {
 			continue
 		}
-		mgr.HandleCredentialUpdate(ctx, cred)
+		r.handleCredentialUpdate(ctx, cred)
 	}
 }
 
@@ -439,6 +500,244 @@ func formatTwitchOAuthToken(token string) string {
 		return token
 	}
 	return "oauth:" + token
+}
+
+func (r *Runtime) handleCredentialUpdate(ctx context.Context, cred *domain.Credential) {
+	if r == nil || cred == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	if r.platform != nil {
+		r.platform.HandleCredentialUpdate(ctx, cred)
+	}
+	if cred.Platform == domain.PlatformTwitch {
+		r.applyTwitchCredential(cred)
+	}
+}
+
+func (r *Runtime) initTwitchState(cfg twitchadapter.Config) {
+	r.twitchMu.Lock()
+	defer r.twitchMu.Unlock()
+	r.twitchBotLogin = strings.TrimSpace(cfg.Username)
+	r.twitchBotToken = strings.TrimSpace(cfg.OAuthToken)
+	r.twitchChannels = sanitizeTwitchChannels(cfg.Channels)
+	r.twitchNoticeHandler = cfg.UserNoticeHandler
+	if len(r.twitchChannels) == 0 && r.twitchBotLogin != "" {
+		r.twitchChannels = []string{ensureTwitchChannel(r.twitchBotLogin)}
+	}
+	if r.cfg != nil {
+		r.cfg.TwitchChannels = append([]string(nil), r.twitchChannels...)
+	}
+}
+
+func (r *Runtime) defaultTwitchChannel() string {
+	r.twitchMu.RLock()
+	defer r.twitchMu.RUnlock()
+	if len(r.twitchChannels) == 0 {
+		return ""
+	}
+	return r.twitchChannels[0]
+}
+
+func (r *Runtime) applyTwitchCredential(cred *domain.Credential) {
+	if cred == nil {
+		return
+	}
+	login := strings.TrimSpace(cred.Metadata["login"])
+	role := strings.ToLower(strings.TrimSpace(cred.Role))
+	changed := false
+
+	r.twitchMu.Lock()
+	switch role {
+	case "bot":
+		token := formatTwitchOAuthToken(cred.AccessToken)
+		if token != "" && token != r.twitchBotToken {
+			r.twitchBotToken = token
+			if r.cfg != nil {
+				r.cfg.TwitchToken = cred.AccessToken
+			}
+			changed = true
+		}
+		if login != "" && !strings.EqualFold(login, r.twitchBotLogin) {
+			r.twitchBotLogin = login
+			if r.cfg != nil {
+				r.cfg.TwitchUsername = login
+			}
+			changed = true
+		}
+		if len(r.twitchChannels) == 0 && login != "" {
+			r.twitchChannels = []string{ensureTwitchChannel(login)}
+			if r.cfg != nil {
+				r.cfg.TwitchChannels = append([]string(nil), r.twitchChannels...)
+			}
+			changed = true
+		}
+	case "streamer":
+		if login != "" && !strings.EqualFold(login, r.twitchStreamerLogin) {
+			r.twitchStreamerLogin = login
+			changed = true
+		}
+		if len(r.twitchChannels) == 0 && login != "" {
+			r.twitchChannels = []string{ensureTwitchChannel(login)}
+			if r.cfg != nil {
+				r.cfg.TwitchChannels = append([]string(nil), r.twitchChannels...)
+			}
+			changed = true
+		}
+		if r.cfg != nil {
+			if cred.AccessToken != "" {
+				r.cfg.TwitchApiToken = cred.AccessToken
+			}
+			if cred.RefreshToken != "" {
+				r.cfg.TwitchApiRefreshToken = cred.RefreshToken
+			}
+		}
+	}
+	r.twitchMu.Unlock()
+
+	if changed {
+		log.Printf("twitch: bot credential updated (user=%s channels=%v)", r.twitchBotLogin, r.twitchChannels)
+		r.syncTwitchAdapter()
+	}
+}
+
+func (r *Runtime) syncTwitchAdapter() {
+	r.twitchMu.RLock()
+	cfg := twitchadapter.Config{
+		Username:          r.twitchBotLogin,
+		OAuthToken:        r.twitchBotToken,
+		Channels:          append([]string(nil), r.twitchChannels...),
+		UserNoticeHandler: r.twitchNoticeHandler,
+	}
+	running := r.twitchAd != nil
+	r.twitchMu.RUnlock()
+
+	if cfg.Username == "" || cfg.OAuthToken == "" || len(cfg.Channels) == 0 {
+		log.Printf("twitch: bot credential present=%v user=%s channels=%d", cfg.OAuthToken != "", cfg.Username, len(cfg.Channels))
+		if running {
+			r.stopTwitchAdapter()
+		} else {
+			log.Println("twitch: adaptador deshabilitado hasta que completes el login del bot.")
+		}
+		return
+	}
+
+	if running {
+		r.stopTwitchAdapter()
+	}
+	r.startTwitchAdapter(cfg)
+}
+
+func (r *Runtime) startTwitchAdapter(cfg twitchadapter.Config) {
+	if r == nil {
+		return
+	}
+	log.Printf("twitch: starting IRC client (user=%s channels=%v)", cfg.Username, cfg.Channels)
+	adapter := twitchadapter.NewAdapter(cfg)
+	if handler := r.dispatcher; handler != nil {
+		adapter.SetHandler(handler)
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	done := make(chan struct{})
+
+	r.twitchMu.Lock()
+	r.twitchAd = adapter
+	r.twitchCancel = cancel
+	r.twitchDone = done
+	r.twitchMu.Unlock()
+
+	if r.multiOut != nil {
+		r.multiOut.Register(domain.PlatformTwitch, adapter)
+	}
+	r.publishTwitchConnected(cfg)
+
+	go func() {
+		defer close(done)
+		if err := adapter.Start(ctx); err != nil && err != context.Canceled {
+			log.Printf("twitch: adapter error: %v", err)
+			r.publishTwitchError(err.Error())
+		}
+	}()
+}
+
+func (r *Runtime) stopTwitchAdapter() {
+	r.twitchMu.Lock()
+	cancel := r.twitchCancel
+	done := r.twitchDone
+	hasAdapter := r.twitchAd != nil
+	r.twitchAd = nil
+	r.twitchCancel = nil
+	r.twitchDone = nil
+	r.twitchMu.Unlock()
+
+	if hasAdapter && r.multiOut != nil {
+		log.Println("twitch: stopping IRC client")
+		r.multiOut.Unregister(domain.PlatformTwitch)
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+}
+
+func (r *Runtime) publishTwitchConnected(cfg twitchadapter.Config) {
+	if r == nil || r.bus == nil {
+		return
+	}
+	payload := events.TwitchBotEventDTO{
+		Username: cfg.Username,
+		Channels: append([]string(nil), cfg.Channels...),
+	}
+	r.bus.Publish(events.TopicTwitchBotConnected, payload)
+}
+
+func (r *Runtime) publishTwitchError(message string) {
+	if r == nil || r.bus == nil {
+		return
+	}
+	r.twitchMu.RLock()
+	payload := events.TwitchBotEventDTO{
+		Username: r.twitchBotLogin,
+		Channels: append([]string(nil), r.twitchChannels...),
+		Message:  message,
+	}
+	r.twitchMu.RUnlock()
+	r.bus.Publish(events.TopicTwitchBotError, payload)
+}
+
+func sanitizeTwitchChannels(input []string) []string {
+	var result []string
+	seen := make(map[string]struct{})
+	for _, raw := range input {
+		parts := strings.Split(raw, ",")
+		for _, part := range parts {
+			channel := ensureTwitchChannel(part)
+			if channel == "" {
+				continue
+			}
+			if _, ok := seen[channel]; ok {
+				continue
+			}
+			seen[channel] = struct{}{}
+			result = append(result, channel)
+		}
+	}
+	return result
+}
+
+func ensureTwitchChannel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "#") {
+		value = "#" + value
+	}
+	return strings.ToLower(value)
 }
 
 func resolveTwitchBroadcasterID(ctx context.Context, clientID, accessToken, username string) (string, error) {

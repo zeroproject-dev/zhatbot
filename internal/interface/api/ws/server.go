@@ -241,6 +241,27 @@ func (s *Server) SetTTSStatusProvider(p TTSStatusReporter) {
 	s.api.setTTSStatusProvider(p)
 }
 
+func (s *Server) OAuthStart(ctx context.Context, platform domain.Platform, role string) (string, error) {
+	if s == nil || s.api == nil {
+		return "", fmt.Errorf("oauth server no disponible")
+	}
+	return s.api.oauthStart(platform, role)
+}
+
+func (s *Server) OAuthStatus(ctx context.Context) (OAuthStatus, error) {
+	if s == nil || s.api == nil {
+		return OAuthStatus{Credentials: map[string]map[string]CredentialStatus{}}, fmt.Errorf("oauth server no disponible")
+	}
+	return s.api.oauthStatus(ctx)
+}
+
+func (s *Server) OAuthLogout(ctx context.Context, platform domain.Platform, role string) error {
+	if s == nil || s.api == nil {
+		return fmt.Errorf("oauth server no disponible")
+	}
+	return s.api.oauthLogout(ctx, platform, role)
+}
+
 type incomingPayload struct {
 	Text      string `json:"text"`
 	Platform  string `json:"platform"`

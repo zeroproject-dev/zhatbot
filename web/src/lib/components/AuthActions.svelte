@@ -4,6 +4,15 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import { getLocale } from '$lib/paraglide/runtime';
 	import { API_BASE_URL } from '$lib/config';
+	import {
+		isWails,
+		oauthStart,
+		oauthStatus,
+		oauthLogout,
+		onOAuthComplete,
+		onOAuthMissingSecret,
+		configSetTwitchSecret
+	} from '$lib/wails/adapter';
 
 	type Platform = 'twitch' | 'kick';
 	type Role = 'bot' | 'streamer';
@@ -17,7 +26,7 @@
 
 	type CredentialsMap = Record<Platform, Partial<Record<Role, CredentialState>>>;
 
-	const baseUrl = API_BASE_URL ?? 'http://localhost:8080';
+const baseUrl = API_BASE_URL ?? 'http://localhost:8080';
 
 	const buttons = [
 		{
@@ -47,29 +56,39 @@
 	let statusError = $state<string | null>(null);
 	let lastSynced = $state<string | null>(null);
 	let logoutKey = $state<string | null>(null);
+	let secretPromptVisible = $state(false);
+	let secretConfigPath = $state('');
+	let secretValue = $state('');
+	let secretSaving = $state(false);
+	let secretError = $state<string | null>(null);
+	let secretProvider = $state<Platform>('twitch');
 
 	const login = async (platform: Platform, role: Role) => {
 		if (!browser) return;
 		feedback = null;
 		const key = `${platform}-${role}`;
 		loadingKey = key;
-		try {
-			const response = await fetch(`${baseUrl}/api/oauth/${platform}/start`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ role })
-			});
+			try {
+				if (isWails()) {
+					await oauthStart(platform, role);
+				} else {
+				const response = await fetch(`${baseUrl}/api/oauth/${platform}/start`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ role })
+				});
 
-			if (!response.ok) {
-				throw new Error(`Request failed with ${response.status}`);
+				if (!response.ok) {
+					throw new Error(`Request failed with ${response.status}`);
+				}
+
+				const data = (await response.json()) as { url?: string };
+				if (!data.url) {
+					throw new Error('Missing redirect url');
+				}
+
+				window.open(data.url, '_blank', 'noopener');
 			}
-
-			const data = (await response.json()) as { url?: string };
-			if (!data.url) {
-				throw new Error('Missing redirect url');
-			}
-
-			window.open(data.url, '_blank', 'noopener');
 			feedback = { type: 'success', message: m.auth_login_success() };
 		} catch (error) {
 			console.error('Login flow error', error);
@@ -86,19 +105,29 @@
 		statusLoading = true;
 		statusError = null;
 		try {
-			const response = await fetch(`${baseUrl}/api/oauth/status`);
-			if (!response.ok) {
-				throw new Error(`Status request failed ${response.status}`);
+			if (isWails()) {
+				const data = (await oauthStatus()) as {
+					credentials?: Record<string, Record<string, CredentialState>>;
+				};
+				credentials = {
+					twitch: data.credentials?.twitch ?? {},
+					kick: data.credentials?.kick ?? {}
+				};
+			} else {
+				const response = await fetch(`${baseUrl}/api/oauth/status`);
+				if (!response.ok) {
+					throw new Error(`Status request failed ${response.status}`);
+				}
+
+				const data = (await response.json()) as {
+					credentials?: Record<string, Record<string, CredentialState>>;
+				};
+
+				credentials = {
+					twitch: data.credentials?.twitch ?? {},
+					kick: data.credentials?.kick ?? {}
+				};
 			}
-
-			const data = (await response.json()) as {
-				credentials?: Record<string, Record<string, CredentialState>>;
-			};
-
-			credentials = {
-				twitch: data.credentials?.twitch ?? {},
-				kick: data.credentials?.kick ?? {}
-			};
 			lastSynced = new Date().toISOString();
 		} catch (error) {
 			console.error('Status fetch failed', error);
@@ -135,13 +164,17 @@
 		logoutKey = key;
 		feedback = null;
 		try {
-			const response = await fetch(`${baseUrl}/api/oauth/logout`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ platform, role })
-			});
-			if (!response.ok) {
-				throw new Error(`logout failed ${response.status}`);
+			if (isWails()) {
+				await oauthLogout(platform, role);
+			} else {
+				const response = await fetch(`${baseUrl}/api/oauth/logout`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ platform, role })
+				});
+				if (!response.ok) {
+					throw new Error(`logout failed ${response.status}`);
+				}
 			}
 			feedback = { type: 'success', message: m.auth_logout_success() };
 		} catch (error) {
@@ -157,8 +190,83 @@
 		loadStatus();
 		const handleFocus = () => loadStatus();
 		window.addEventListener('focus', handleFocus);
-		return () => window.removeEventListener('focus', handleFocus);
+		let oauthUnsub: (() => void) | undefined;
+		let secretUnsub: (() => void) | undefined;
+		if (isWails()) {
+			onOAuthComplete((payload) => {
+				const data = (payload ?? {}) as Record<string, unknown>;
+				const status = typeof data.status === 'string' ? data.status : '';
+				const errorMessage = typeof data.error === 'string' ? data.error : '';
+				if (status === 'success') {
+					feedback = { type: 'success', message: m.auth_login_success() };
+				} else if (status && status !== 'started') {
+					feedback = {
+						type: 'error',
+						message: errorMessage ? `${m.auth_login_error()} (${errorMessage})` : m.auth_login_error()
+					};
+				}
+				void loadStatus();
+			}).then((off) => {
+				oauthUnsub = off;
+			});
+			onOAuthMissingSecret((payload) => {
+				const data = (payload ?? {}) as Record<string, unknown>;
+				const path = typeof data.configPath === 'string' ? data.configPath : '';
+				const provider =
+					typeof data.provider === 'string' && (data.provider === 'twitch' || data.provider === 'kick')
+						? data.provider
+						: 'twitch';
+				secretProvider = provider as Platform;
+				secretConfigPath = path;
+				secretValue = '';
+				secretError = null;
+				secretPromptVisible = true;
+				feedback = {
+					type: 'error',
+					message: m.auth_login_error()
+				};
+			}).then((off) => {
+				secretUnsub = off;
+			});
+		}
+		return () => {
+			window.removeEventListener('focus', handleFocus);
+			oauthUnsub?.();
+			secretUnsub?.();
+		};
 	});
+
+	const closeSecretPrompt = () => {
+		secretPromptVisible = false;
+		secretValue = '';
+		secretError = null;
+	};
+
+	const saveSecret = async () => {
+		if (!secretValue) {
+			secretError = 'Client secret required';
+			return;
+		}
+		secretSaving = true;
+		secretError = null;
+		try {
+			await configSetTwitchSecret(secretValue);
+			feedback = {
+				type: 'success',
+				message: 'Secret saved. Please retry the login.'
+			};
+			closeSecretPrompt();
+		} catch (error) {
+			secretError = error instanceof Error ? error.message : 'Could not save secret';
+		} finally {
+			secretSaving = false;
+		}
+	};
+
+	const handleSecretSubmit = async (event: SubmitEvent) => {
+		event.preventDefault();
+		await saveSecret();
+	};
 </script>
 
 <section
@@ -239,5 +347,56 @@
 
 	{#if statusError}
 		<p class="text-xs text-rose-300" aria-live="assertive">{statusError}</p>
+	{/if}
+
+	{#if secretPromptVisible}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+			<div class="w-full max-w-md rounded-2xl border border-slate-600/40 bg-slate-900 p-6 text-slate-50 shadow-2xl">
+				<header class="space-y-1">
+					<p class="text-sm font-semibold uppercase tracking-wide text-indigo-200">
+						Twitch Client Secret required
+					</p>
+					<p class="text-xs text-slate-300">
+						In desktop mode Twitch exige un client secret para completar OAuth. Añádelo para
+						{secretProvider} en el archivo de configuración local y vuelve a intentar.
+					</p>
+					{#if secretConfigPath}
+						<p class="text-xs text-slate-400">Config file: {secretConfigPath}</p>
+					{/if}
+				</header>
+				<form class="mt-4 space-y-3 text-sm" onsubmit={handleSecretSubmit}>
+					<label class="flex flex-col gap-1 text-xs uppercase tracking-wide text-slate-400">
+						Client Secret
+						<input
+							type="password"
+							class="rounded-xl border border-slate-600/60 bg-slate-800/60 px-3 py-2 text-slate-100 focus:border-indigo-400 focus:outline-none"
+							bind:value={secretValue}
+							autofocus
+							placeholder="Paste secret here"
+						/>
+					</label>
+					{#if secretError}
+						<p class="text-xs text-rose-300">{secretError}</p>
+					{/if}
+					<div class="flex gap-3">
+						<button
+							type="submit"
+							class="flex-1 rounded-xl bg-indigo-500/90 px-4 py-2 text-sm font-semibold uppercase tracking-wide text-white hover:bg-indigo-400 disabled:opacity-50"
+							disabled={secretSaving}
+						>
+							{secretSaving ? 'Saving…' : 'Save secret'}
+						</button>
+						<button
+							type="button"
+							class="rounded-xl border border-slate-600/60 px-4 py-2 text-xs uppercase tracking-wide text-slate-300 hover:bg-slate-800/60"
+							onclick={closeSecretPrompt}
+							disabled={secretSaving}
+						>
+							Cancel
+						</button>
+					</div>
+				</form>
+			</div>
+		</div>
 	{/if}
 </section>

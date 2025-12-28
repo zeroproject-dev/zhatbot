@@ -3,6 +3,7 @@ import { readable, type Readable } from 'svelte/store';
 import type { ChatCommandPayload, ChatMessage, ChatStreamStatus } from '$lib/types/chat';
 import { WS_URL } from '$lib/config';
 import { ttsQueue, type TTSEvent } from '$lib/stores/tts';
+import { isWails, onChatMessage, callWailsBinding } from '$lib/wails/adapter';
 
 interface ChatStreamOptions {
 	url?: string;
@@ -51,6 +52,36 @@ export const createChatStream = (options: ChatStreamOptions = {}): Readable<Chat
 			update();
 			return () => {
 				stopMock();
+			};
+		}
+
+		if (isWails()) {
+			status = 'connecting';
+			update();
+			let unsub: (() => void) | undefined;
+			onChatMessage((payload) => {
+				try {
+					const normalized = normalizeMessagePayload(payload);
+					push(normalized);
+				} catch (error) {
+					console.error('[chat-stream] No se pudo procesar el evento de Wails', error, payload);
+				}
+			})
+				.then((off) => {
+					unsub = off;
+					status = 'connected';
+					update();
+				})
+				.catch((error) => {
+					console.error('[chat-stream] No se pudo suscribir a eventos Wails', error);
+					status = 'disconnected';
+					update();
+				});
+
+			return () => {
+				unsub?.();
+				status = 'disconnected';
+				update();
 			};
 		}
 
@@ -223,13 +254,25 @@ export const normalizeMessagePayload = (payload: unknown): ChatMessage => {
 
 export const sendChatCommand = async (payload: ChatCommandPayload) => {
 	if (!browser) throw new Error('Solo disponible en el navegador');
+	const text = payload.text?.trim();
+	if (!text) {
+		throw new Error('El texto es obligatorio');
+	}
+
+	if (isWails()) {
+		await callWailsBinding('Chat_SendCommand', {
+			text,
+			platform: payload.platform ?? 'twitch',
+			channel_id: payload.channel_id ?? '',
+			username: payload.username ?? '',
+			user_id: payload.user_id ?? ''
+		});
+		return;
+	}
+
 	const socket = activeSocket;
 	if (!socket || socket.readyState !== WebSocket.OPEN) {
 		throw new Error('No hay conexión activa');
-	}
-
-	if (!payload.text || payload.text.trim().length === 0) {
-		throw new Error('El texto es obligatorio');
 	}
 
 	const message = {
@@ -237,7 +280,7 @@ export const sendChatCommand = async (payload: ChatCommandPayload) => {
 		username: 'web-user',
 		user_id: 'web',
 		...payload,
-		text: payload.text.trim()
+		text
 	};
 
 	socket.send(JSON.stringify(message));

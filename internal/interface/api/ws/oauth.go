@@ -270,15 +270,15 @@ type oauthStartResponse struct {
 	URL string `json:"url"`
 }
 
-type credentialStatus struct {
+type CredentialStatus struct {
 	HasAccessToken  bool      `json:"has_access_token"`
 	HasRefreshToken bool      `json:"has_refresh_token"`
 	UpdatedAt       time.Time `json:"updated_at,omitempty"`
 	ExpiresAt       time.Time `json:"expires_at,omitempty"`
 }
 
-type statusResponse struct {
-	Credentials map[string]map[string]credentialStatus `json:"credentials"`
+type OAuthStatus struct {
+	Credentials map[string]map[string]CredentialStatus `json:"credentials"`
 }
 
 type categorySearchResponse struct {
@@ -323,6 +323,143 @@ func normalizeRole(role string) string {
 	default:
 		return "bot"
 	}
+}
+
+func (a *apiHandlers) oauthStart(platform domain.Platform, role string) (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("oauth no configurado")
+	}
+	switch platform {
+	case domain.PlatformTwitch:
+		return a.startTwitchOAuth(role)
+	case domain.PlatformKick:
+		return a.startKickOAuth(role)
+	default:
+		return "", fmt.Errorf("plataforma no soportada")
+	}
+}
+
+func (a *apiHandlers) startTwitchOAuth(role string) (string, error) {
+	if a == nil || a.twitchCfg == nil || !a.twitchCfg.enabled() {
+		return "", fmt.Errorf("twitch oauth no disponible")
+	}
+
+	role = normalizeRole(role)
+	verifier, err := generateCodeVerifier()
+	if err != nil {
+		return "", err
+	}
+
+	state := a.state.Add(domain.PlatformTwitch, role, verifier)
+	challenge := generateCodeChallenge(verifier)
+
+	q := url.Values{}
+	q.Set("client_id", a.twitchCfg.ClientID)
+	q.Set("redirect_uri", a.twitchCfg.RedirectURI)
+	q.Set("response_type", "code")
+	q.Set("scope", strings.Join(a.twitchCfg.scopesForRole(role), " "))
+	q.Set("state", state)
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+
+	authURL := twitchAuthorizeURL + "?" + q.Encode()
+	return authURL, nil
+}
+
+func (a *apiHandlers) startKickOAuth(role string) (string, error) {
+	if a == nil || a.kickCfg == nil || !a.kickCfg.enabled() || a.kickOAuth == nil {
+		return "", fmt.Errorf("kick oauth no disponible")
+	}
+
+	role = normalizeRole(role)
+	if role != "streamer" {
+		log.Printf("kick oauth: role %q solicitado, usando streamer como único rol soportado", role)
+	}
+	role = "streamer"
+	log.Println("kick oauth: si necesitas el scope chat:write, revoca la app en Kick (Settings > Connections) y vuelve a iniciar sesión.")
+
+	verifier, err := generateCodeVerifier()
+	if err != nil {
+		return "", err
+	}
+
+	state := a.state.Add(domain.PlatformKick, role, verifier)
+	challenge := generateCodeChallenge(verifier)
+
+	authURL := a.kickOAuth.OAuth().AuthorizationURL(kicksdk.AuthorizationURLInput{
+		ResponseType:  "code",
+		State:         state,
+		Scopes:        a.kickCfg.scopesForRole(role),
+		CodeChallenge: challenge,
+	})
+
+	return authURL, nil
+}
+
+func (a *apiHandlers) oauthStatus(ctx context.Context) (OAuthStatus, error) {
+	if a == nil || a.credRepo == nil {
+		return OAuthStatus{Credentials: map[string]map[string]CredentialStatus{}}, nil
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	list, err := a.credRepo.List(ctx)
+	if err != nil {
+		return OAuthStatus{}, err
+	}
+
+	resp := OAuthStatus{
+		Credentials: make(map[string]map[string]CredentialStatus),
+	}
+
+	for _, cred := range list {
+		plat := string(cred.Platform)
+		if plat == "" {
+			continue
+		}
+		if _, ok := resp.Credentials[plat]; !ok {
+			resp.Credentials[plat] = make(map[string]CredentialStatus)
+		}
+
+		resp.Credentials[plat][cred.Role] = CredentialStatus{
+			HasAccessToken:  cred.AccessToken != "",
+			HasRefreshToken: cred.RefreshToken != "",
+			UpdatedAt:       cred.UpdatedAt,
+			ExpiresAt:       cred.ExpiresAt,
+		}
+	}
+
+	return resp, nil
+}
+
+func (a *apiHandlers) oauthLogout(ctx context.Context, platform domain.Platform, role string) error {
+	if a == nil || a.credRepo == nil {
+		return fmt.Errorf("credential store no disponible")
+	}
+	if platform == "" {
+		return fmt.Errorf("plataforma inválida")
+	}
+
+	role = normalizeRole(role)
+	if platform == domain.PlatformKick {
+		role = "streamer"
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if err := a.credRepo.Delete(ctx, platform, role); err != nil {
+		return err
+	}
+
+	a.notifyCredentialHook(ctx, &domain.Credential{
+		Platform: platform,
+		Role:     role,
+	})
+	return nil
 }
 
 func (a *apiHandlers) handleCategorySearch(w http.ResponseWriter, r *http.Request) {
@@ -673,28 +810,13 @@ func (a *apiHandlers) handleTwitchStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	role := normalizeRole(req.Role)
-	verifier, err := generateCodeVerifier()
+	url, err := a.startTwitchOAuth(req.Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start oauth")
 		return
 	}
 
-	state := a.state.Add(domain.PlatformTwitch, role, verifier)
-	challenge := generateCodeChallenge(verifier)
-
-	q := url.Values{}
-	q.Set("client_id", a.twitchCfg.ClientID)
-	q.Set("redirect_uri", a.twitchCfg.RedirectURI)
-	q.Set("response_type", "code")
-	q.Set("scope", strings.Join(a.twitchCfg.scopesForRole(role), " "))
-	q.Set("state", state)
-	q.Set("code_challenge", challenge)
-	q.Set("code_challenge_method", "S256")
-
-	authURL := twitchAuthorizeURL + "?" + q.Encode()
-
-	writeJSON(w, http.StatusOK, oauthStartResponse{URL: authURL})
+	writeJSON(w, http.StatusOK, oauthStartResponse{URL: url})
 }
 
 func (a *apiHandlers) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
@@ -865,29 +987,13 @@ func (a *apiHandlers) handleKickStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role := normalizeRole(req.Role)
-	if role != "streamer" {
-		log.Printf("kick oauth: role %q solicitado, usando streamer como único rol soportado", role)
-	}
-	role = "streamer"
-	log.Println("kick oauth: si necesitas el scope chat:write, revoca la app en Kick (Settings > Connections) y vuelve a iniciar sesión.")
-	verifier, err := generateCodeVerifier()
+	url, err := a.startKickOAuth(req.Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start oauth")
 		return
 	}
 
-	state := a.state.Add(domain.PlatformKick, role, verifier)
-	challenge := generateCodeChallenge(verifier)
-
-	authURL := a.kickOAuth.OAuth().AuthorizationURL(kicksdk.AuthorizationURLInput{
-		ResponseType:  "code",
-		State:         state,
-		Scopes:        a.kickCfg.scopesForRole(role),
-		CodeChallenge: challenge,
-	})
-
-	writeJSON(w, http.StatusOK, oauthStartResponse{URL: authURL})
+	writeJSON(w, http.StatusOK, oauthStartResponse{URL: url})
 }
 
 func (a *apiHandlers) handleKickCallback(w http.ResponseWriter, r *http.Request) {
@@ -949,10 +1055,6 @@ func (a *apiHandlers) handleKickCallback(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if a == nil {
-		writeJSON(w, http.StatusOK, statusResponse{Credentials: map[string]map[string]credentialStatus{}})
-		return
-	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -962,40 +1064,14 @@ func (a *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if a.credRepo == nil {
-		writeJSON(w, http.StatusOK, statusResponse{Credentials: map[string]map[string]credentialStatus{}})
-		return
-	}
-
-	list, err := a.credRepo.List(r.Context())
+	status, err := a.oauthStatus(r.Context())
 	if err != nil {
 		log.Printf("oauth status: list error: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load credentials")
 		return
 	}
 
-	resp := statusResponse{
-		Credentials: make(map[string]map[string]credentialStatus),
-	}
-
-	for _, cred := range list {
-		plat := string(cred.Platform)
-		if plat == "" {
-			continue
-		}
-		if _, ok := resp.Credentials[plat]; !ok {
-			resp.Credentials[plat] = make(map[string]credentialStatus)
-		}
-
-		resp.Credentials[plat][cred.Role] = credentialStatus{
-			HasAccessToken:  cred.AccessToken != "",
-			HasRefreshToken: cred.RefreshToken != "",
-			UpdatedAt:       cred.UpdatedAt,
-			ExpiresAt:       cred.ExpiresAt,
-		}
-	}
-
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (a *apiHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -1005,10 +1081,6 @@ func (a *apiHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	if a == nil || a.credRepo == nil {
-		writeError(w, http.StatusInternalServerError, "credential store not configured")
 		return
 	}
 
@@ -1024,22 +1096,12 @@ func (a *apiHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role := normalizeRole(req.Role)
-	if platform == domain.PlatformKick {
-		role = "streamer"
-	}
-
-	if err := a.credRepo.Delete(r.Context(), platform, role); err != nil {
-		log.Printf("oauth logout: delete failed (%s/%s): %v", platform, role, err)
+	if err := a.oauthLogout(r.Context(), platform, req.Role); err != nil {
+		log.Printf("oauth logout: delete failed (%s/%s): %v", platform, req.Role, err)
 		writeError(w, http.StatusInternalServerError, "could not delete credentials")
 		return
 	}
 
-	log.Printf("oauth logout: credenciales eliminadas (%s/%s)", platform, role)
-	a.notifyCredentialHook(r.Context(), &domain.Credential{
-		Platform: platform,
-		Role:     role,
-	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

@@ -30,6 +30,9 @@ export const fetchNotifications = async (limit = 50): Promise<NotificationRecord
 export const createNotification = async (
 	payload: CreateNotificationPayload
 ): Promise<NotificationRecord> => {
+	if (isWails()) {
+		return await callWailsBinding<NotificationRecord>('Notifications_Create', payload);
+	}
 	const response = await fetch(BASE_URL, {
 		method: 'POST',
 		headers: {

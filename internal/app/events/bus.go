@@ -6,12 +6,14 @@ import (
 )
 
 const (
-	TopicChatMessage  = "chat:message"
-	TopicNotification = "notifications:event"
-	TopicAppError     = "app:error"
-	TopicStreamStatus = "stream:status"
-	TopicTTSStatus    = "tts:status"
-	TopicTTSSpoken    = "tts:spoken"
+	TopicChatMessage        = "chat:message"
+	TopicNotification       = "notifications:event"
+	TopicAppError           = "app:error"
+	TopicStreamStatus       = "stream:status"
+	TopicTTSStatus          = "tts:status"
+	TopicTTSSpoken          = "tts:spoken"
+	TopicTwitchBotConnected = "twitch:bot:connected"
+	TopicTwitchBotError     = "twitch:bot:error"
 
 	defaultBufferSize = 128
 )

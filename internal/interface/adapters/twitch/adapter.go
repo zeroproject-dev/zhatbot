@@ -83,6 +83,9 @@ func (a *Adapter) Start(ctx context.Context) error {
 	if err := conn.Join(a.cfg.Channels...); err != nil {
 		return fmt.Errorf("twitch: Join: %w", err)
 	}
+	for _, ch := range a.cfg.Channels {
+		log.Printf("twitch: joined channel %s", ch)
+	}
 
 	a.mu.Lock()
 	a.conn = conn

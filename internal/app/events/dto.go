@@ -39,3 +39,9 @@ func NewChatMessageDTO(msg domain.Message) ChatMessageDTO {
 		Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
 	}
 }
+
+type TwitchBotEventDTO struct {
+	Username string   `json:"username"`
+	Channels []string `json:"channels"`
+	Message  string   `json:"message,omitempty"`
+}
