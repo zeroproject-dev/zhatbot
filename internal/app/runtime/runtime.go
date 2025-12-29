@@ -35,7 +35,9 @@ import (
 	ttsusecase "zhatBot/internal/usecase/tts"
 )
 
-type Options struct{}
+type Options struct {
+	LoadMode string
+}
 
 type Runtime struct {
 	ctx        context.Context
@@ -67,13 +69,13 @@ type Runtime struct {
 	twitchNoticeHandler twitchadapter.UserNoticeHandler
 }
 
-func Start(ctx context.Context, _ Options) (*Runtime, error) {
+func Start(ctx context.Context, opts Options) (*Runtime, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(opts.LoadMode)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("load config: %w", err)
@@ -158,7 +160,7 @@ func Start(ctx context.Context, _ Options) (*Runtime, error) {
 	loadInitialTokens(runtimeCtx, credStore, cfg)
 
 	twitchCfg := twitchadapter.Config{
-		Username:          cfg.TwitchUsername,
+		Username:          cfg.TwitchBotUsername,
 		OAuthToken:        formatTwitchOAuthToken(cfg.TwitchToken),
 		Channels:          cfg.TwitchChannels,
 		UserNoticeHandler: eventLogger.HandleTwitchUserNotice,
@@ -440,12 +442,9 @@ func loadInitialTokens(ctx context.Context, store *sqlitestorage.CredentialStore
 			cfg.TwitchToken = cred.AccessToken
 		}
 		if login := strings.TrimSpace(cred.Metadata["login"]); login != "" {
-			cfg.TwitchUsername = login
-			if len(cfg.TwitchChannels) == 0 {
-				cfg.TwitchChannels = []string{ensureTwitchChannel(login)}
-			}
+			cfg.TwitchBotUsername = login
 		}
-		log.Printf("twitch: bot credential present=%v user=%s", cred.AccessToken != "", cfg.TwitchUsername)
+		log.Printf("twitch: bot credential present=%v user=%s", cred.AccessToken != "", cfg.TwitchBotUsername)
 	} else if err != nil {
 		log.Printf("error obteniendo token de Twitch bot desde DB: %v", err)
 	}
@@ -456,6 +455,12 @@ func loadInitialTokens(ctx context.Context, store *sqlitestorage.CredentialStore
 		}
 		if cred.RefreshToken != "" {
 			cfg.TwitchApiRefreshToken = cred.RefreshToken
+		}
+		if login := strings.TrimSpace(cred.Metadata["login"]); login != "" {
+			cfg.TwitchUsername = login
+			if len(cfg.TwitchChannels) == 0 {
+				cfg.TwitchChannels = []string{ensureTwitchChannel(login)}
+			}
 		}
 	} else if err != nil {
 		log.Printf("error obteniendo token de Twitch streamer desde DB: %v", err)
@@ -563,14 +568,7 @@ func (r *Runtime) applyTwitchCredential(cred *domain.Credential) {
 		if login != "" && !strings.EqualFold(login, r.twitchBotLogin) {
 			r.twitchBotLogin = login
 			if r.cfg != nil {
-				r.cfg.TwitchUsername = login
-			}
-			changed = true
-		}
-		if len(r.twitchChannels) == 0 && login != "" {
-			r.twitchChannels = []string{ensureTwitchChannel(login)}
-			if r.cfg != nil {
-				r.cfg.TwitchChannels = append([]string(nil), r.twitchChannels...)
+				r.cfg.TwitchBotUsername = login
 			}
 			changed = true
 		}
@@ -579,12 +577,18 @@ func (r *Runtime) applyTwitchCredential(cred *domain.Credential) {
 			r.twitchStreamerLogin = login
 			changed = true
 		}
-		if len(r.twitchChannels) == 0 && login != "" {
-			r.twitchChannels = []string{ensureTwitchChannel(login)}
-			if r.cfg != nil {
-				r.cfg.TwitchChannels = append([]string(nil), r.twitchChannels...)
+		if login != "" {
+			channel := ensureTwitchChannel(login)
+			if len(r.twitchChannels) == 0 || !strings.EqualFold(r.twitchChannels[0], channel) {
+				r.twitchChannels = []string{channel}
+				if r.cfg != nil {
+					r.cfg.TwitchChannels = append([]string(nil), r.twitchChannels...)
+				}
+				changed = true
 			}
-			changed = true
+			if r.cfg != nil {
+				r.cfg.TwitchUsername = login
+			}
 		}
 		if r.cfg != nil {
 			if cred.AccessToken != "" {
@@ -598,7 +602,7 @@ func (r *Runtime) applyTwitchCredential(cred *domain.Credential) {
 	r.twitchMu.Unlock()
 
 	if changed {
-		log.Printf("twitch: bot credential updated (user=%s channels=%v)", r.twitchBotLogin, r.twitchChannels)
+		log.Printf("twitch: credential update (bot=%s streamer=%s channels=%v)", r.twitchBotLogin, r.twitchStreamerLogin, r.twitchChannels)
 		r.syncTwitchAdapter()
 	}
 }

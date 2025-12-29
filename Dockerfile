@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   libc6-dev \
   pkg-config \
   libsqlite3-dev \
+  libasound2-dev \
   && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
@@ -50,6 +51,11 @@ FROM nginx:1.27-bookworm
 
 # Quitar config default
 RUN rm /etc/nginx/conf.d/default.conf
+
+# Dependencias runtime (audio para TTS)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  libasound2 \
+  && rm -rf /var/lib/apt/lists/*
 
 # Config SPA + API + WS
 COPY nginx.conf /etc/nginx/conf.d/default.conf

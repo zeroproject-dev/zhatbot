@@ -14,7 +14,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	run, err := appruntime.Start(ctx, appruntime.Options{})
+	run, err := appruntime.Start(ctx, appruntime.Options{
+		LoadMode: "only-bot",
+	})
 	if err != nil {
 		log.Fatalf("no se pudo iniciar el runtime: %v", err)
 	}

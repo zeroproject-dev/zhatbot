@@ -221,13 +221,19 @@ func (a *apiHandlers) register(mux *http.ServeMux) {
 	}
 
 	if a.twitchCfg != nil && a.twitchCfg.enabled() {
+		log.Println("Agregando rutas de twitch")
 		mux.HandleFunc("/api/oauth/twitch/start", a.withCORS(a.handleTwitchStart))
 		mux.HandleFunc("/api/oauth/twitch/callback", a.handleTwitchCallback)
+		// Legacy paths (without /api) for compatibility with older web deployments.
+		mux.HandleFunc("/oauth/twitch/start", a.withCORS(a.handleTwitchStart))
+		mux.HandleFunc("/oauth/twitch/callback", a.handleTwitchCallback)
 	}
 
 	if a.kickCfg != nil && a.kickCfg.enabled() && a.kickOAuth != nil {
 		mux.HandleFunc("/api/oauth/kick/start", a.withCORS(a.handleKickStart))
 		mux.HandleFunc("/api/oauth/kick/callback", a.handleKickCallback)
+		mux.HandleFunc("/oauth/kick/start", a.withCORS(a.handleKickStart))
+		mux.HandleFunc("/oauth/kick/callback", a.handleKickCallback)
 	}
 }
 

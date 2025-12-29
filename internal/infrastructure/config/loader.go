@@ -14,6 +14,7 @@ import (
 )
 
 type Config struct {
+	TwitchBotUsername     string
 	TwitchUsername        string
 	TwitchToken           string
 	TwitchChannels        []string
@@ -42,19 +43,22 @@ type fileConfig struct {
 }
 
 var (
-	configFilePath    string
+	configFilePath   string
 	cachedFileConfig *fileConfig
 )
 
-func Load() (*Config, error) {
-	loadDevDotEnv()
+func Load(mode string) (*Config, error) {
+	loadDevDotEnv(mode)
 
 	jsonCfg, err := loadJSONConfig()
 	if err != nil {
 		return nil, err
 	}
+	if mode == "only-bot" {
+	}
 
 	cfg := &Config{
+		TwitchBotUsername:     os.Getenv("TWITCH_BOT_USERNAME"),
 		TwitchUsername:        os.Getenv("TWITCH_BOT_USERNAME"),
 		TwitchToken:           os.Getenv("TWITCH_BOT_ACCESS_TOKEN"),
 		TwitchChannels:        []string{os.Getenv("TWITCH_BOT_CHANNELS")},
@@ -71,7 +75,7 @@ func Load() (*Config, error) {
 		DatabasePath: firstNonEmpty(os.Getenv("DATABASE_PATH"), jsonCfg.DatabasePath),
 	}
 
-	if cfg.TwitchUsername == "" {
+	if cfg.TwitchBotUsername == "" {
 		log.Println("Advertencia: TWITCH_BOT_USERNAME no configurado")
 	}
 
@@ -82,8 +86,17 @@ func ConfigFilePath() string {
 	return configFilePath
 }
 
-func loadDevDotEnv() {
+func loadDevDotEnv(loadMode string) {
+	if loadMode == "only-bot" {
+
+		if err := godotenv.Load(".env"); err != nil {
+			log.Printf("warning: could not load %s: %v", ".env", err)
+		}
+		return
+	}
+
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("ZHATBOT_MODE")))
+	log.Println("MODE: " + mode)
 	if mode != "development" {
 		return
 	}
