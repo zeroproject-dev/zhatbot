@@ -5,9 +5,9 @@
 		sendChatCommand,
 		type ChatStreamState
 	} from '$lib/services/chat-stream';
-	import type { ChatMessage } from '$lib/types/chat';
-	import { m } from '$lib/paraglide/messages.js';
-	import { getLocale } from '$lib/paraglide/runtime';
+import type { ChatMessage } from '$lib/types/chat';
+import { m } from '$lib/paraglide/messages.js';
+import { getLocale } from '$lib/paraglide/runtime';
 
 	const chatStream = getSharedChatStream();
 	let state: ChatStreamState = { messages: [], status: 'connecting' };
@@ -105,6 +105,35 @@
 				return role;
 		}
 	};
+
+	type MessageSegment =
+		| { type: 'text'; value: string }
+		| { type: 'link'; value: string };
+
+	const segmentMessageText = (text?: string): MessageSegment[] => {
+		if (!text) return [];
+		const segments: MessageSegment[] = [];
+		const urlRegex = /(https?:\/\/[^\s<]+)/gi;
+		let lastIndex = 0;
+		let match: RegExpExecArray | null;
+
+		while ((match = urlRegex.exec(text)) !== null) {
+			const [url] = match;
+			const start = match.index;
+			if (start > lastIndex) {
+				segments.push({ type: 'text', value: text.slice(lastIndex, start) });
+			}
+			segments.push({ type: 'link', value: url });
+			lastIndex = start + url.length;
+		}
+		if (lastIndex < text.length) {
+			segments.push({ type: 'text', value: text.slice(lastIndex) });
+		}
+		if (segments.length === 0) {
+			return [{ type: 'text', value: text }];
+		}
+		return segments;
+	};
 </script>
 
 <section
@@ -175,7 +204,22 @@
 										>{formatTimestamp(message.received_at)}</time
 									>
 								</div>
-								<p class="text-base leading-relaxed text-white/90">{message.text}</p>
+								<p class="text-base leading-relaxed text-white/90">
+									{#each segmentMessageText(message.text) as segment}
+										{#if segment.type === 'link'}
+											<a
+												href={segment.value}
+												target="_blank"
+												rel="noopener noreferrer"
+												class="font-semibold text-cyan-200 underline decoration-cyan-200/60 underline-offset-2 transition hover:text-cyan-100"
+											>
+												{segment.value}
+											</a>
+										{:else}
+											{segment.value}
+										{/if}
+									{/each}
+								</p>
 								{#if getRoleKeys(message).length}
 									<div class="flex flex-wrap gap-2">
 										{#each getRoleKeys(message) as role}
