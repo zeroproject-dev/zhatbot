@@ -16,8 +16,12 @@
 		return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	};
 
+	type PlaybackReason = 'auto' | 'manual' | 'history';
+
 	let lastAutoPlayed = $state<string | null>(null);
 	const desktopMode = browser && isWails();
+	const playbackQueue: { event: TTSEvent; reason: PlaybackReason }[] = [];
+	let queueRunning = false;
 
 	onMount(() => {
 		if (!desktopMode) {
@@ -37,7 +41,7 @@
 		};
 	});
 
-	const playEvent = async (event: TTSEvent | undefined, reason: 'auto' | 'manual' | 'history') => {
+	const playEvent = async (event: TTSEvent | undefined, reason: PlaybackReason) => {
 		if (!event?.audio_base64 || desktopMode) {
 			console.warn(`[tts] playback requested without audio (${reason})`, event);
 			return;
@@ -48,12 +52,62 @@
 			const audio = new Audio(src);
 			const vol = typeof volume === 'number' ? volume : 1;
 			audio.volume = Math.min(Math.max(vol, 0), 1);
-			audio.onplay = () => console.debug(`[tts] playing audio (${reason})`);
-			audio.onended = () => console.debug(`[tts] audio finished (${reason})`);
-			await audio.play();
+
+			await new Promise<void>((resolve, reject) => {
+				const cleanup = () => {
+					audio.onended = null;
+					audio.onerror = null;
+				};
+				audio.onplay = () => console.debug(`[tts] playing audio (${reason})`);
+				audio.onended = () => {
+					console.debug(`[tts] audio finished (${reason})`);
+					cleanup();
+					resolve();
+				};
+				audio.onerror = (event) => {
+					console.error(`[tts] audio error (${reason})`, event);
+					cleanup();
+					reject(event);
+				};
+				audio
+					.play()
+					.then(() => {
+						// playback started, promise resolves on ended/error handlers
+					})
+					.catch((error) => {
+						cleanup();
+						reject(error);
+					});
+			});
 		} catch (error) {
 			console.error(`tts playback failed (${reason})`, error, event);
 		}
+	};
+
+	const enqueueAutoPlayback = (event: TTSEvent) => {
+		playbackQueue.push({ event, reason: 'auto' });
+		if (!queueRunning) {
+			void processQueue();
+		}
+	};
+
+	const processQueue = async () => {
+		if (queueRunning) {
+			return;
+		}
+		queueRunning = true;
+		while (playbackQueue.length > 0) {
+			const next = playbackQueue.shift();
+			if (!next) {
+				break;
+			}
+			try {
+				await playEvent(next.event, next.reason);
+			} catch (error) {
+				console.error('[tts] queue playback error', error, next.event);
+			}
+		}
+		queueRunning = false;
 	};
 
 	$effect(() => {
@@ -61,7 +115,7 @@
 		if (!latest?.timestamp || !latest.audio_base64) return;
 		if (latest.timestamp === lastAutoPlayed) return;
 		lastAutoPlayed = latest.timestamp;
-		void playEvent(latest, 'auto');
+		enqueueAutoPlayback(latest);
 	});
 
 	const normalizeSpokenEvent = (payload: Record<string, unknown> | null): TTSEvent | null => {
