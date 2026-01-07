@@ -18,7 +18,29 @@
 
 	type PlaybackReason = 'auto' | 'manual' | 'history';
 
-	let lastAutoPlayed = $state<string | null>(null);
+	const loadLastAutoPlayed = (): string | null => {
+		if (!browser) return null;
+		try {
+			return sessionStorage.getItem('tts:last-auto-played');
+		} catch {
+			return null;
+		}
+	};
+
+	const persistLastAutoPlayed = (value: string | null) => {
+		if (!browser) return;
+		try {
+			if (value) {
+				sessionStorage.setItem('tts:last-auto-played', value);
+			} else {
+				sessionStorage.removeItem('tts:last-auto-played');
+			}
+		} catch {
+			// ignore storage failures
+		}
+	};
+
+	let lastAutoPlayed = $state<string | null>(loadLastAutoPlayed());
 	const desktopMode = browser && isWails();
 	const playbackQueue: { event: TTSEvent; reason: PlaybackReason }[] = [];
 	let queueRunning = false;
@@ -115,6 +137,7 @@
 		if (!latest?.timestamp || !latest.audio_base64) return;
 		if (latest.timestamp === lastAutoPlayed) return;
 		lastAutoPlayed = latest.timestamp;
+		persistLastAutoPlayed(latest.timestamp);
 		enqueueAutoPlayback(latest);
 	});
 
