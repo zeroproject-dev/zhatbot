@@ -16,6 +16,8 @@ import (
 	"github.com/nicklaw5/helix/v2"
 
 	"zhatBot/internal/app"
+	"zhatBot/internal/app/emotes"
+	emoteproviders "zhatBot/internal/app/emotes/providers"
 	"zhatBot/internal/app/events"
 	ttsruntime "zhatBot/internal/app/tts/runner"
 	"zhatBot/internal/domain"
@@ -53,6 +55,7 @@ type Runtime struct {
 	commandSvc *commands.Service
 	ttsServ    *ttsusecase.Service
 	ttsRunner  *ttsruntime.Runner
+	emotes     *emotes.Manager
 	wg         sync.WaitGroup
 	started    bool
 	status     *statususecase.Resolver
@@ -93,6 +96,13 @@ func Start(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 
 	categorySvc := categoryusecase.NewService(categoryusecase.Config{})
+	emoteManager := emotes.NewManager(emotes.ManagerOptions{
+		Providers: []emotes.Provider{
+			emoteproviders.NewSevenTVProvider(nil),
+			emoteproviders.NewFFZProvider(nil),
+			emoteproviders.NewBTTVProvider(nil),
+		},
+	})
 	resolver := stream.NewResolver(nil, nil)
 	multiOut := outs.NewMultiSender()
 	eventLogger := notifications.NewEventLogger()
@@ -119,6 +129,7 @@ func Start(ctx context.Context, opts Options) (*Runtime, error) {
 		commandSvc: commandSvc,
 		status:     statusResolver,
 		category:   categorySvc,
+		emotes:     emoteManager,
 	}
 
 	platformMgr := app.NewPlatformManager(app.ManagerConfig{
@@ -159,11 +170,31 @@ func Start(ctx context.Context, opts Options) (*Runtime, error) {
 
 	loadInitialTokens(runtimeCtx, credStore, cfg)
 
+	var helixClient *helix.Client
+	if cfg.TwitchClientId != "" {
+		if cli, err := helix.NewClient(&helix.Options{
+			ClientID: cfg.TwitchClientId,
+		}); err != nil {
+			log.Printf("twitch: helix client init failed: %v", err)
+		} else {
+			token := strings.TrimSpace(cfg.TwitchApiToken)
+			if token != "" {
+				cli.SetAppAccessToken(token)
+				helixClient = cli
+			} else if userToken := strings.TrimSpace(cfg.TwitchToken); userToken != "" {
+				cli.SetUserAccessToken(userToken)
+				helixClient = cli
+			}
+		}
+	}
+
 	twitchCfg := twitchadapter.Config{
 		Username:          cfg.TwitchBotUsername,
 		OAuthToken:        formatTwitchOAuthToken(cfg.TwitchToken),
 		Channels:          cfg.TwitchChannels,
 		UserNoticeHandler: eventLogger.HandleTwitchUserNotice,
+		EmoteManager:      emoteManager,
+		HelixClient:       helixClient,
 	}
 	run.initTwitchState(twitchCfg)
 

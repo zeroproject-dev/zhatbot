@@ -1,6 +1,12 @@
 import { browser } from '$app/environment';
 import { readable, type Readable } from 'svelte/store';
-import type { ChatCommandPayload, ChatMessage, ChatStreamStatus } from '$lib/types/chat';
+import type {
+	ChatCommandPayload,
+	ChatMessage,
+	ChatStreamStatus,
+	ChatToken,
+	EmoteProvider
+} from '$lib/types/chat';
 import { WS_URL } from '$lib/config';
 import { ttsQueue, type TTSEvent } from '$lib/stores/tts';
 import { isWails, onChatMessage, callWailsBinding } from '$lib/wails/adapter';
@@ -198,8 +204,10 @@ const startMockFeed = (push: (message: ChatMessage) => void) => {
 			is_platform_owner: Boolean(base.is_platform_owner),
 			is_platform_admin: Boolean(base.is_platform_admin),
 			is_platform_mod: Boolean(base.is_platform_mod),
-			is_platform_vip: Boolean(base.is_platform_vip)
+			is_platform_vip: Boolean(base.is_platform_vip),
+			tokens: []
 		};
+		mock.tokens = [{ type: 'text', text: mock.text }];
 
 		push(mock);
 	}, 3500);
@@ -236,6 +244,7 @@ export const normalizeMessagePayload = (payload: unknown): ChatMessage => {
 	const text = getStringField(source, 'text', 'Text');
 	const received_at =
 		getStringField(source, 'received_at', 'ReceivedAt', 'receivedAt') || new Date().toISOString();
+	const tokens = parseTokens(source.tokens ?? source.Tokens);
 
 	return {
 		platform,
@@ -248,7 +257,8 @@ export const normalizeMessagePayload = (payload: unknown): ChatMessage => {
 		is_platform_admin: getBooleanField(source, 'is_platform_admin', 'IsPlatformAdmin'),
 		is_platform_mod: getBooleanField(source, 'is_platform_mod', 'IsPlatformMod'),
 		is_platform_vip: getBooleanField(source, 'is_platform_vip', 'IsPlatformVip'),
-		received_at
+		received_at,
+		tokens: tokens.length ? tokens : [{ type: 'text', text }]
 	};
 };
 
@@ -367,3 +377,39 @@ const getBooleanField = (source: Record<string, unknown>, ...keys: string[]) => 
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null;
+
+const parseTokens = (input: unknown): ChatToken[] => {
+	if (!Array.isArray(input)) {
+		return [];
+	}
+	const tokens: ChatToken[] = [];
+	for (const raw of input) {
+		if (!isPlainObject(raw)) continue;
+		const type = getStringField(raw, 'type', 'Type').toLowerCase();
+		if (type === 'emote') {
+			const emoteSource =
+				isPlainObject(raw.emote) || isPlainObject(raw.Emote) ? ((raw.emote ?? raw.Emote) as Record<string, unknown>) : raw;
+			const url = getStringField(emoteSource, 'url', 'URL');
+			if (!url) continue;
+			const rawProvider = getStringField(emoteSource, 'provider', 'Provider').toLowerCase();
+			const provider: EmoteProvider =
+				rawProvider === 'bttv' || rawProvider === 'ffz' || rawProvider === '7tv' ? (rawProvider as EmoteProvider) : 'twitch';
+			tokens.push({
+				type: 'emote',
+				provider,
+				id: getStringField(emoteSource, 'id', 'ID'),
+				code: getStringField(emoteSource, 'code', 'Code'),
+				url,
+				url2x: getStringField(emoteSource, 'url2x', 'URL2x'),
+				url3x: getStringField(emoteSource, 'url3x', 'URL3x'),
+				animated: getBooleanField(emoteSource, 'animated', 'Animated')
+			});
+			continue;
+		}
+		tokens.push({
+			type: 'text',
+			text: getStringField(raw, 'text', 'Text') || ''
+		});
+	}
+	return tokens;
+};

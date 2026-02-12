@@ -5,6 +5,7 @@
 	import type { ChatMessage } from '$lib/types/chat';
 	import { getLocale } from '$lib/paraglide/runtime';
 	import { m } from '$lib/paraglide/messages.js';
+	import ChatMessageTokens from '$lib/components/ChatMessageTokens.svelte';
 
 	type Phase = 'idle' | 'collecting' | 'closed';
 
@@ -480,7 +481,9 @@
 									<span class="font-semibold text-slate-700 dark:text-slate-200">{message.platform.toUpperCase()}</span>
 									<time>{formatTimestamp(message.received_at)}</time>
 								</div>
-								<p class="mt-1 text-sm text-slate-900 dark:text-slate-100">{message.text}</p>
+								<div class="mt-1 text-sm text-slate-900 dark:text-slate-100">
+									<ChatMessageTokens tokens={message.tokens ?? []} fallbackText={message.text} />
+								</div>
 							</li>
 						{/each}
 					</ul>

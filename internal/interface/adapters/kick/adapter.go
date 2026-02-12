@@ -228,6 +228,12 @@ func mapChatMessageToDomain(m kickchatwrapper.ChatMessage, broadcasterUserID int
 		UserID:    strconv.Itoa(sender.ID),
 		Username:  sender.Username,
 		Text:      m.Content,
+		Tokens: []domain.MessageToken{
+			{
+				Type: domain.MessageTokenText,
+				Text: m.Content,
+			},
+		},
 
 		IsPrivate: false,
 

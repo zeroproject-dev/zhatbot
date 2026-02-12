@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/adeithe/go-twitch/irc"
+	"github.com/nicklaw5/helix/v2"
 
+	"zhatBot/internal/app/emotes"
 	"zhatBot/internal/domain"
 )
 
@@ -19,21 +22,32 @@ type Config struct {
 	OAuthToken        string
 	Channels          []string
 	UserNoticeHandler UserNoticeHandler
+	EmoteManager      *emotes.Manager
+	HelixClient       *helix.Client
 }
 
-type MessageHandler func(ctx context.Context, msg domain.Message) error
-type UserNoticeHandler func(irc.UserNotice)
+type (
+	MessageHandler    func(ctx context.Context, msg domain.Message) error
+	UserNoticeHandler func(irc.UserNotice)
+)
 
 type Adapter struct {
 	cfg     Config
 	handler MessageHandler
 
-	mu   sync.RWMutex
-	conn *irc.Conn
+	mu        sync.RWMutex
+	conn      *irc.Conn
+	emotes    *emotes.Manager
+	helix     *helix.Client
+	channelID sync.Map // login(lower) -> broadcaster id
 }
 
 func NewAdapter(cfg Config) *Adapter {
-	return &Adapter{cfg: cfg}
+	return &Adapter{
+		cfg:    cfg,
+		emotes: cfg.EmoteManager,
+		helix:  cfg.HelixClient,
+	}
 }
 
 func (a *Adapter) SetHandler(h MessageHandler) {
@@ -56,7 +70,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 	}
 
 	conn.OnMessage(func(cm irc.ChatMessage) {
-		// log.Printf("[Twitch] %s: %s", cm.Sender.DisplayName, cm.Text)
+		log.Printf("[Twitch] %s: %s - %s", cm.Sender.DisplayName, cm.Text, cm.IRCMessage.Raw)
 
 		a.mu.RLock()
 		handler := a.handler
@@ -65,7 +79,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 			return
 		}
 
-		msg := mapChatMessageToDomain(cm)
+		msg := a.mapChatMessageToDomain(ctx, cm)
 		if err := handler(ctx, msg); err != nil {
 			log.Printf("twitch: error en handler: %v", err)
 		}
@@ -121,8 +135,9 @@ func (a *Adapter) SendMessage(ctx context.Context, platform domain.Platform, cha
 	return conn.Say(channelID, text)
 }
 
-func mapChatMessageToDomain(cm irc.ChatMessage) domain.Message {
+func (a *Adapter) mapChatMessageToDomain(ctx context.Context, cm irc.ChatMessage) domain.Message {
 	sender := cm.Sender
+	tokens := a.buildMessageTokens(ctx, cm)
 
 	return domain.Message{
 		Platform: domain.PlatformTwitch,
@@ -139,5 +154,70 @@ func mapChatMessageToDomain(cm irc.ChatMessage) domain.Message {
 		IsPlatformMod:   sender.IsModerator,
 		IsPlatformVip:   sender.IsVIP,
 		IsSubscriber:    sender.IsSubscriber,
+		Tokens:          tokens,
 	}
+}
+
+func (a *Adapter) buildMessageTokens(ctx context.Context, cm irc.ChatMessage) []domain.MessageToken {
+	text := cm.Text
+	tokens := tokenizeNativeEmotes(text, cm.IRCMessage.Tags["emotes"])
+	if a.emotes == nil {
+		return tokens
+	}
+	info := emotes.ChannelInfo{
+		TwitchID:    a.resolveChannelID(ctx, cm),
+		TwitchLogin: trimChannel(cm.Channel),
+	}
+	return a.emotes.ResolveThirdPartyTokens(ctx, tokens, info)
+}
+
+func (a *Adapter) resolveChannelID(ctx context.Context, cm irc.ChatMessage) string {
+	if id := strings.TrimSpace(cm.IRCMessage.Tags["room-id"]); id != "" {
+		return id
+	}
+	if cm.ChannelID > 0 {
+		return strconv.FormatInt(cm.ChannelID, 10)
+	}
+
+	login := strings.ToLower(trimChannel(cm.Channel))
+	if login == "" {
+		return ""
+	}
+
+	if cached, ok := a.channelID.Load(login); ok {
+		if id, ok := cached.(string); ok && id != "" {
+			return id
+		}
+	}
+
+	client := a.helix
+	if client == nil {
+		return ""
+	}
+
+	resp, err := client.GetUsers(&helix.UsersParams{
+		Logins: []string{login},
+	})
+	if err != nil {
+		log.Printf("twitch: helix get users (%s) failed: %v", login, err)
+		return ""
+	}
+	if resp.ErrorMessage != "" {
+		log.Printf("twitch: helix get users (%s) error: %s", login, resp.ErrorMessage)
+		return ""
+	}
+	if len(resp.Data.Users) == 0 {
+		return ""
+	}
+
+	id := strings.TrimSpace(resp.Data.Users[0].ID)
+	if id != "" {
+		a.channelID.Store(login, id)
+	}
+	return id
+}
+
+func trimChannel(channel string) string {
+	channel = strings.TrimSpace(channel)
+	return strings.TrimPrefix(channel, "#")
 }

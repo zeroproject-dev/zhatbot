@@ -1,3 +1,21 @@
+export type EmoteProvider = 'twitch' | 'bttv' | 'ffz' | '7tv';
+
+export type ChatToken =
+	| {
+			type: 'text';
+			text: string;
+	  }
+	| {
+			type: 'emote';
+			provider: EmoteProvider;
+			id: string;
+			code: string;
+			url: string;
+			url2x?: string;
+			url3x?: string;
+			animated?: boolean;
+	  };
+
 export interface ChatMessage {
 	platform: string;
 	channel_id: string;
@@ -10,6 +28,7 @@ export interface ChatMessage {
 	is_platform_mod: boolean;
 	is_platform_vip: boolean;
 	received_at?: string;
+	tokens?: ChatToken[];
 }
 
 export type ChatStreamStatus = 'connecting' | 'connected' | 'disconnected';
