@@ -40,6 +40,10 @@ type App struct {
 	busWG           sync.WaitGroup
 	oauthMu         sync.Mutex
 	oauthFlows      map[string]*oauthLoopback
+	httpMu          sync.Mutex
+	httpServer      *http.Server
+	httpListener    net.Listener
+	httpBaseURL     string
 }
 
 const (
@@ -59,8 +63,6 @@ type oauthLoopback struct {
 	state        string
 	codeVerifier string
 	redirectURI  string
-	listener     net.Listener
-	server       *http.Server
 	result       chan oauthResult
 	cancel       context.CancelFunc
 }
@@ -106,6 +108,10 @@ func (a *App) OnStartup(ctx context.Context) {
 	a.runtime = run
 	a.runtimeCancel = rtCancel
 
+	if err := a.startLocalHTTPServer(); err != nil {
+		wailsruntime.LogErrorf(ctx, "local http server start failed: %v", err)
+	}
+
 	a.subscribeToTopic(events.TopicChatMessage)
 	a.subscribeToTopic(events.TopicTTSStatus)
 	a.subscribeToTopic(events.TopicTTSSpoken)
@@ -136,6 +142,8 @@ func (a *App) OnShutdown(ctx context.Context) {
 		}
 		a.runtime = nil
 	}
+
+	a.stopLocalHTTPServer()
 }
 
 func (a *App) subscribeToTopic(topic string) {
@@ -648,15 +656,12 @@ func (a *App) startOAuthLoopback(platform domain.Platform, role string) error {
 		}
 	}
 
-	basePort := preferredLoopbackPort(platform, cfg)
-	listener, port, err := listenLoopbackWithFallback(basePort)
-	if err != nil {
+	if err := a.startLocalHTTPServer(); err != nil {
 		return err
 	}
-	redirectURI := fmt.Sprintf("http://localhost:%d/oauth/callback/%s", port, platform)
+	redirectURI := fmt.Sprintf("%s/oauth/callback/%s", a.httpBaseURL, platform)
 	state, err := generateRandomString(32)
 	if err != nil {
-		listener.Close()
 		return fmt.Errorf("state: %w", err)
 	}
 
@@ -666,7 +671,6 @@ func (a *App) startOAuthLoopback(platform domain.Platform, role string) error {
 		role:        role,
 		state:       state,
 		redirectURI: redirectURI,
-		listener:    listener,
 		result:      make(chan oauthResult, 1),
 		cancel:      cancel,
 	}
@@ -674,7 +678,6 @@ func (a *App) startOAuthLoopback(platform domain.Platform, role string) error {
 	authURL, err := a.buildOAuthURL(flow, cfg)
 	if err != nil {
 		cancel()
-		listener.Close()
 		return err
 	}
 
@@ -684,12 +687,6 @@ func (a *App) startOAuthLoopback(platform domain.Platform, role string) error {
 	}
 	a.oauthFlows[string(platform)] = flow
 	a.oauthMu.Unlock()
-
-	if err := a.runOAuthLoopbackServer(flowCtx, flow); err != nil {
-		a.removeOAuthFlow(platform)
-		cancel()
-		return err
-	}
 
 	if a.ctx != nil {
 		wailsruntime.EventsEmit(a.ctx, "oauth:status", map[string]any{
@@ -757,36 +754,15 @@ func (a *App) buildOAuthURL(flow *oauthLoopback, cfg *config.Config) (string, er
 	}
 }
 
-func (a *App) runOAuthLoopbackServer(ctx context.Context, flow *oauthLoopback) error {
-	mux := http.NewServeMux()
-	callbackPath := fmt.Sprintf("/oauth/callback/%s", flow.provider)
-	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
-		a.handleOAuthCallback(ctx, flow, w, r)
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
-
-	server := &http.Server{
-		Handler: mux,
+func (a *App) handleOAuthCallback(ctx context.Context, platform domain.Platform, w http.ResponseWriter, r *http.Request) {
+	a.oauthMu.Lock()
+	flow := a.oauthFlows[string(platform)]
+	a.oauthMu.Unlock()
+	if flow == nil {
+		writeOAuthHTML(w, false, "OAuth no está activo. Intenta de nuevo.")
+		return
 	}
-	flow.server = server
-
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-	}()
-
-	go func() {
-		err := server.Serve(flow.listener)
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			flow.sendResult("error", fmt.Errorf("loopback server: %w", err))
-		}
-	}()
-
-	return nil
+	a.handleOAuthCallbackWithFlow(ctx, flow, w, r)
 }
 
 func (a *App) waitOAuthResult(ctx context.Context, flow *oauthLoopback) {
@@ -815,7 +791,7 @@ func (a *App) waitOAuthResult(ctx context.Context, flow *oauthLoopback) {
 	}
 }
 
-func (a *App) handleOAuthCallback(ctx context.Context, flow *oauthLoopback, w http.ResponseWriter, r *http.Request) {
+func (a *App) handleOAuthCallbackWithFlow(ctx context.Context, flow *oauthLoopback, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1176,16 +1152,14 @@ func (a *App) requireTwitchSecret() error {
 
 const defaultLoopbackPort = 17833
 
-func preferredLoopbackPort(platform domain.Platform, cfg *config.Config) int {
-	var raw string
-	provider := string(platform)
-	switch platform {
-	case domain.PlatformTwitch:
-		raw = cfg.TwitchRedirectURI
-	case domain.PlatformKick:
-		raw = cfg.KickRedirectURI
+func preferredHTTPPort(cfg *config.Config) int {
+	if cfg == nil {
+		return defaultLoopbackPort
 	}
-	if port, ok := parseLocalhostPort(raw, provider); ok {
+	if port, ok := parseLocalhostPort(cfg.TwitchRedirectURI, "twitch"); ok {
+		return port
+	}
+	if port, ok := parseLocalhostPort(cfg.KickRedirectURI, "kick"); ok {
 		return port
 	}
 	return defaultLoopbackPort
